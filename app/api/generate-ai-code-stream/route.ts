@@ -10,6 +10,7 @@ import { executeSearchPlan, formatSearchResultsForAI, selectTargetFile } from '@
 import { FileManifest } from '@/types/file-manifest';
 import type { ConversationState, ConversationMessage, ConversationEdit } from '@/types/conversation';
 import { appConfig } from '@/config/app.config';
+import { xaiDesign, notionDesign } from '@/lib/design-systems';
 
 // Force dynamic route to enable streaming
 export const dynamic = 'force-dynamic';
@@ -628,40 +629,56 @@ DESIGN-FIRST WORKFLOW:
 This is a ${isEdit ? 'FOLLOW-UP EDIT' : 'NEW BUILD FROM SCRATCH'}.
 
 ${isEdit ? '' : `STEP 1 - CREATE DESIGN.MD (MANDATORY FOR ALL NEW BUILDS):
-Before generating any component code, FIRST create a file called \`design.md\` that defines the complete design system for this application based on the user's prompt. This is the foundation for every component you build.
+Before generating any component code, FIRST detect the type of application the user wants to build, then create a file called \`design.md\` that defines the complete design system. This is the foundation for every component you build.
 
-The design.md MUST include ALL of these sections with specific, detailed values derived from the user's prompt:
+DETECT APP TYPE FROM USER PROMPT:
+- If the user asks for a "landing page", "marketing site", "startup landing", "hero page" → SaaS LANDING PAGE
+- If the user asks for a "SaaS app", "dashboard", "web app", "platform", "multi-page app", "workspace" → SAAS APPLICATION
+- For everything else (portfolio, blog, e-commerce, etc.) → CUSTOM DESIGN SYSTEM
 
-1. **Metadata** - Version, design name, description, product type, brand summary
-2. **Brand Philosophy** - Personality, emotional tone, visual identity, positioning
-3. **Design Principles** - Simplicity, hierarchy, whitespace, consistency, interaction, clarity, accessibility
-4. **Color System** - Brand colors (primary/secondary/accent), surface colors, text colors, semantic colors, state colors, dark mode colors, gradients
-5. **Typography System** - Font families, type scale (hero display through micro), weights, line heights, letter spacing
-6. **Spacing System** - Base unit, margin/padding/section/layout/container/grid spacing
-7. **Shape Language** - Border radius scale, geometric philosophy, rounded vs sharp rules
-8. **Elevation & Depth** - Shadow system, layer hierarchy, blur, glassmorphism, card/modal/hover elevation
-9. **Layout System** - Containers (max width, gutters), grid system, section layouts
-10. **Responsive System** - Breakpoints (mobile/tablet/desktop/wide), responsive rules
-11. **Motion System** - Timing, easing, motion principles
-12. **Component Library** - Buttons, Inputs, Navigation, Cards, Feedback, Data, AI components
-13. **Interaction States** - Hover, active, focus, disabled, loading, selected, error, success
-14. **Navigation System** - Header behavior, sticky nav, mobile nav, mega menus, footer
-15. **Imagery & Illustration** - Illustration/photography/mockup/avatar style, iconography
-16. **Iconography System** - Icon style, stroke width, filled vs outline, sizing
-17. **Content & Copywriting** - Headline tone, CTA tone, capitalization, brand voice
-18. **Accessibility** - Contrast ratios, keyboard nav, focus visibility, reduced motion, touch targets
-19. **Data Visualization** - Chart colors, axis/grid/tooltip styling
-20. **AI UX Rules** - Response styling, streaming behavior, confidence indicators, loading states
-21. **Marketing Patterns** - Hero sections, CTA banners, pricing, testimonials, FAQ, feature grids
-22. **Dashboard Patterns** - Sidebar, tables, metrics cards, analytics panels, empty states
-23. **Do's and Don'ts** - Approved patterns, forbidden patterns, correct usage examples
-24. **Implementation Notes** - CSS variable naming, Tailwind mapping, component naming, folder structure
-25. **AI Generation Guidelines** - Layout instructions, component generation rules, brand consistency
-26. **Iteration Guide** - How to extend components, add tokens, naming conventions
-27. **Known Gaps** - Missing components, future improvements, planned systems
-28. **Appendix** - References, inspiration, external libraries
+CHOOSE DESIGN SYSTEM BASED ON APP TYPE:
 
-Every value in design.md must be specific (actual hex colors like #1a365d, actual font names like 'Inter', actual spacing values like '24px'). Do NOT use generic placeholders.
+=== SAAS LANDING PAGE → USE xAI DESIGN SYSTEM ===
+The xAI design system is a dark-canvas-only, engineered-minimalist aesthetic. Apply ALL of these tokens and patterns to the user's app:
+
+${xaiDesign}
+
+IMPORTANT for xAI-based designs:
+- ALWAYS use dark canvas (#0a0a0a) as the background — never light mode
+- Use white outline pill buttons for all CTAs (button-outline-on-dark)
+- Only use white-filled button for the primary/sign-up CTA
+- Display typography at weight 400 with tight negative tracking
+- Use GeistMono (or Geist Mono from Google Fonts) for section labels/eyebrows
+- Use Inter (or Universal Sans alternative) for body and display
+- No shadows on cards — use 1px hairline borders instead
+- 8px border radius on cards, 9999px (pill) on all buttons
+- Muted accent palette (sunset/dusk/twilight) sparingly for illustration moments
+
+=== SAAS APPLICATION → USE NOTION DESIGN SYSTEM ===
+The Notion design system is a light, illustration-rich, pastel-optimistic aesthetic. Apply ALL of these tokens and patterns to the user's app:
+
+${notionDesign}
+
+IMPORTANT for Notion-based designs:
+- ALWAYS use white canvas (#ffffff) as default background
+- Use deep navy (#0a1530) for hero bands and dark sections
+- Use signature purple (#5645d4) for primary CTAs only
+- Buttons are 8px rounded rectangles — NOT pills
+- Cards use 12px border radius
+- Use pastel tint cards (peach, rose, mint, lavender, sky, yellow) for feature sections
+- Bold yellow (#f9e79f) for high-emphasis banner cards
+- Notion Sans / Inter font family across all UI
+- Use subtle shadows for elevation (not hairline borders like xAI)
+- 4-tier pricing comparison when pricing is needed
+
+=== CUSTOM DESIGN SYSTEM → CREATE FROM SCRATCH ===
+For all other application types, create a detailed design.md that includes ALL 28 sections with specific values derived from the user's prompt. Be as detailed as the reference design systems above.
+
+GENERAL RULES FOR ALL DESIGN SYSTEMS:
+- Every value in design.md must be specific (actual hex colors like #1a365d, actual font names, actual spacing values in px)
+- Do NOT use generic placeholders like "primary-color" or "font-family-1"
+- You MAY use Google Fonts — include @import or @font-face with Google Fonts URL in your design.md or index.css
+- When using Google Fonts, specify the actual font name and import it via @import url(...) in index.css
 
 STEP 2 - GENERATE ALL COMPONENTS FOLLOWING DESIGN.MD:
 After design.md is created, generate ALL component files. EVERY design decision in every component MUST be derived from the design.md file. Use the exact colors, fonts, spacing, shadows, and other tokens defined in design.md. Do not deviate from the design system.`}
