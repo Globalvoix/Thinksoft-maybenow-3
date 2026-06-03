@@ -13,7 +13,7 @@ const colors = Object.keys(colorsJson).reduce(
   {} as Record<string, string>
 );
 
-const sizes = Array.from({ length: 1000 }, (_, i) => i).reduce(
+const sizes = Array.from({ length: 903 }, (_, i) => i + 97).reduce(
   (acc, curr) => {
     acc[curr] = `${curr}px`;
 
@@ -60,6 +60,7 @@ const themeConfig: Config = {
     "./pages/**/*.{js,ts,jsx,tsx,mdx}",
     "./components/**/*.{js,ts,jsx,tsx,mdx}",
     "./app/**/*.{js,ts,jsx,tsx,mdx}",
+    "./thinksoft-ui-clone/**/*.{js,ts,jsx,tsx,mdx}",
     "./components-new/**/*.{js,ts,jsx,tsx,mdx}",
     "./styling-reference/ai-ready-website/app/**/*.{ts,tsx}",
     "./styling-reference/ai-ready-website/components/**/*.{ts,tsx}",

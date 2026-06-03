@@ -1,0 +1,11 @@
+.hide-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.hide-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.zip-page, .zip-page * {
+  font-family: var(--font-inter), sans-serif !important;
+}
