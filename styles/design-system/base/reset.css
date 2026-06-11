@@ -87,7 +87,7 @@ select {
 /* Reset button styles */
 button {
   background: none;
-  border: none;
+  border-width: 0;
   padding: 0;
   cursor: pointer;
   text-align: inherit;

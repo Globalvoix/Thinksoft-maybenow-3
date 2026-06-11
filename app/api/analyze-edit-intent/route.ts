@@ -49,7 +49,7 @@ const searchPlanSchema = z.object({
   
   regexPatterns: z.array(z.string()).optional().describe('Regex patterns for finding code structures (e.g., "className=[\\"\\\'].*header.*[\\"\\\']")'),
   
-  fileTypesToSearch: z.array(z.string()).default(['.jsx', '.tsx', '.js', '.ts']).describe('File extensions to search'),
+  fileTypesToSearch: z.array(z.string()).default(['.tsx', '.ts', '.jsx', '.js']).describe('File extensions to search'),
   
   expectedMatches: z.number().min(1).max(10).default(1).describe('Expected number of matches (helps validate search worked)'),
   

@@ -263,13 +263,44 @@ package_json = {
         "vite": "^4.3.9",
         "tailwindcss": "^3.3.0",
         "postcss": "^8.4.31",
-        "autoprefixer": "^10.4.16"
+        "autoprefixer": "^10.4.16",
+        "typescript": "^5.3.0",
+        "@types/react": "^18.2.0",
+        "@types/react-dom": "^18.2.0"
     }
 }
 
 with open('/home/user/app/package.json', 'w') as f:
     json.dump(package_json, f, indent=2)
 print('✓ package.json')
+
+# tsconfig.json
+tsconfig_json = """{
+  "compilerOptions": {
+    "target": "ES2020",
+    "useDefineForClassFields": true,
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "skipLibCheck": true,
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "isolatedModules": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "strict": true,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "noFallthroughCasesInSwitch": true,
+    "forceConsistentCasingInFileNames": true
+  },
+  "include": ["src"]
+}
+"""
+
+with open('/home/user/app/tsconfig.json', 'w') as f:
+    f.write(tsconfig_json)
+print('✓ tsconfig.json')
 
 # Vite config
 vite_config = """import { defineConfig } from 'vite'
@@ -329,7 +360,7 @@ index_html = """<!DOCTYPE html>
   </head>
   <body>
     <div id="root"></div>
-    <script type="module" src="/src/main.jsx"></script>
+    <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>"""
 
@@ -337,24 +368,24 @@ with open('/home/user/app/index.html', 'w') as f:
     f.write(index_html)
 print('✓ index.html')
 
-# Main.jsx
-main_jsx = """import React from 'react'
+# Main.tsx
+main_tsx = """import React from 'react'
 import ReactDOM from 'react-dom/client'
-import App from './App.jsx'
+import App from './App'
 import './index.css'
 
-ReactDOM.createRoot(document.getElementById('root')).render(
+ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <App />
   </React.StrictMode>,
 )"""
 
-with open('/home/user/app/src/main.jsx', 'w') as f:
-    f.write(main_jsx)
-print('✓ src/main.jsx')
+with open('/home/user/app/src/main.tsx', 'w') as f:
+    f.write(main_tsx)
+print('✓ src/main.tsx')
 
-# App.jsx
-app_jsx = """function App() {
+# App.tsx
+app_tsx = """function App() {
   return (
     <div className="min-h-screen bg-gray-900 text-white flex items-center justify-center p-4">
       <div className="text-center max-w-2xl">
@@ -369,9 +400,9 @@ app_jsx = """function App() {
 
 export default App"""
 
-with open('/home/user/app/src/App.jsx', 'w') as f:
-    f.write(app_jsx)
-print('✓ src/App.jsx')
+with open('/home/user/app/src/App.tsx', 'w') as f:
+    f.write(app_tsx)
+print('✓ src/App.tsx')
 
 # Index.css
 index_css = """@tailwind base;
@@ -441,11 +472,12 @@ print('Waiting for server to be ready...')
     await new Promise(resolve => setTimeout(resolve, appConfig.e2b.viteStartupDelay));
     
     // Track initial files
-    this.existingFiles.add('src/App.jsx');
-    this.existingFiles.add('src/main.jsx');
+    this.existingFiles.add('src/App.tsx');
+    this.existingFiles.add('src/main.tsx');
     this.existingFiles.add('src/index.css');
     this.existingFiles.add('index.html');
     this.existingFiles.add('package.json');
+    this.existingFiles.add('tsconfig.json');
     this.existingFiles.add('vite.config.js');
     this.existingFiles.add('tailwind.config.js');
     this.existingFiles.add('postcss.config.js');
@@ -508,5 +540,51 @@ print(f'✓ Vite restarted with PID: {process.pid}')
 
   isAlive(): boolean {
     return !!this.sandbox;
+  }
+
+  async keepAlive(): Promise<boolean> {
+    if (!this.sandbox) return false;
+    try {
+      if (typeof this.sandbox.setTimeout === 'function') {
+        this.sandbox.setTimeout(appConfig.e2b.timeoutMs);
+        return true;
+      }
+      const result = await this.runCommand('echo "keepalive"');
+      return result.success;
+    } catch {
+      return false;
+    }
+  }
+
+  async replaceText(oldText: string, newText: string): Promise<string[]> {
+    if (!this.sandbox) return [];
+    const pyOld = oldText.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, '\\n').replace(/\r/g, '');
+    const pyNew = newText.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, '\\n').replace(/\r/g, '');
+    const result = await this.sandbox.runCode(`
+import os,glob
+old = '${pyOld}'
+new_text = '${pyNew}'
+root = '/home/user/app'
+changed = []
+exclude_dirs = {'node_modules','.git','dist','.next'}
+exts = ('*.tsx','*.ts','*.jsx','*.js','*.css','*.html')
+for ext in exts:
+    for fp in glob.glob(os.path.join(root,'**',ext),recursive=True):
+        parts = fp.replace('\\\\','/').split('/')
+        if any(e in parts for e in exclude_dirs): continue
+        try:
+            with open(fp,'r',encoding='utf-8',errors='ignore') as f:
+                content = f.read()
+            if old in content:
+                new_content = content.replace(old,new_text)
+                with open(fp,'w',encoding='utf-8') as f:
+                    f.write(new_content)
+                changed.append(fp)
+        except: pass
+print('\\n'.join(changed) if changed else 'NO_CHANGES')
+`);
+    const output = (result.logs?.stdout || []).join('\n');
+    if (!output.trim() || output === 'NO_CHANGES') return [];
+    return output.split('\n').filter((f: string) => f.trim());
   }
 }

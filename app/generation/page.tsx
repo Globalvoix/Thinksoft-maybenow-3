@@ -87,7 +87,7 @@ function AISandboxPage() {
   const [homeScreenFading, setHomeScreenFading] = useState(false);
   const [homeUrlInput, setHomeUrlInput] = useState('');
   const [homeContextInput, setHomeContextInput] = useState('');
-  const [activeTab, setActiveTab] = useState<'preview' | 'code' | 'design'>('preview');
+  const [activeTab, setActiveTab] = useState<'preview' | 'code' | 'security' | 'graph' | 'secrets'>('preview');
   const [showStyleSelector, setShowStyleSelector] = useState(false);
   const [selectedStyle, setSelectedStyle] = useState<string | null>(null);
   const [showLoadingBackground, setShowLoadingBackground] = useState(false);
@@ -104,6 +104,8 @@ function AISandboxPage() {
   const [sandboxFiles, setSandboxFiles] = useState<Record<string, string>>({});
   const [hasInitialSubmission, setHasInitialSubmission] = useState<boolean>(false);
   const [fileStructure, setFileStructure] = useState<string>('');
+  const [streamingAiContent, setStreamingAiContent] = useState('');
+  const [selectedElement, setSelectedElement] = useState<{ tag: string; id: string; classes: string; text: string; selector: string } | null>(null);
   
   const [conversationContext, setConversationContext] = useState<{
     scrapedWebsites: Array<{ url: string; content: any; timestamp: Date }>;
@@ -257,7 +259,31 @@ function AISandboxPage() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // Run only on mount
-  
+
+  // Keep sandbox alive with periodic heartbeat
+  useEffect(() => {
+    const sandboxId = sandboxData?.sandboxId;
+    if (!sandboxId) return;
+
+    const keepAliveInterval = setInterval(async () => {
+      try {
+        const res = await fetch('/api/keepalive-sandbox', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sandboxId }),
+        });
+        const data = await res.json();
+        if (!data.success) {
+          console.warn('[keepalive] Sandbox keepalive failed:', data.error || 'unknown reason');
+        }
+      } catch (err) {
+        console.warn('[keepalive] Sandbox keepalive request failed:', err);
+      }
+    }, 120000); // 2 minutes
+
+    return () => clearInterval(keepAliveInterval);
+  }, [sandboxData?.sandboxId]);
+
   useEffect(() => {
     // Handle Escape key for home screen
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -698,6 +724,8 @@ Tip: I automatically detect and install npm packages from your code imports (lik
                   }, 3000);
                   // Reset loading state when complete
                   setLoading(false);
+                  // Trigger graph data refresh
+                  window.dispatchEvent(new CustomEvent('graph-refresh'));
                   break;
                   
                 case 'error':
@@ -1797,8 +1825,13 @@ Tip: I automatically detect and install npm packages from your code imports (lik
                     isThinking: false,
                     thinkingDuration: data.duration
                   }));
+                } else if (data.type === 'info') {
+                  setGenerationProgress(prev => ({
+                    ...prev,
+                    status: data.message || 'Working...'
+                  }));
                 } else if (data.type === 'conversation') {
-                  // Add conversational text to chat
+                  // Accumulate conversational text for streaming display
                   let text = data.text || '';
                   
                   // Remove package tags from the text
@@ -1809,7 +1842,7 @@ Tip: I automatically detect and install npm packages from your code imports (lik
                   if (!text.includes('<file') && !text.includes('import React') && 
                       !text.includes('export default') && !text.includes('className=') &&
                       text.trim().length > 0) {
-                    addChatMessage(text.trim(), 'ai');
+                    setStreamingAiContent(prev => prev + text.trim() + '\n\n');
                   }
                 } else if (data.type === 'stream' && data.raw) {
                   setGenerationProgress(prev => {
@@ -1837,7 +1870,8 @@ Tip: I automatically detect and install npm packages from your code imports (lik
                       // Only add if we haven't processed this file yet
                       if (!processedFiles.has(filePath)) {
                         const fileExt = filePath.split('.').pop() || '';
-                        const fileType = fileExt === 'jsx' || fileExt === 'js' ? 'javascript' :
+                        const fileType = fileExt === 'tsx' || fileExt === 'ts' || fileExt === 'jsx' || fileExt === 'js' ? 'javascript' :
+                                        fileExt === 'ts' ? 'typescript' :
                                         fileExt === 'css' ? 'css' :
                                         fileExt === 'json' ? 'json' :
                                         fileExt === 'html' ? 'html' : 'text';
@@ -1885,7 +1919,8 @@ Tip: I automatically detect and install npm packages from your code imports (lik
                       
                       if (!processedFiles.has(filePath)) {
                         const fileExt = filePath.split('.').pop() || '';
-                        const fileType = fileExt === 'jsx' || fileExt === 'js' ? 'javascript' :
+                        const fileType = fileExt === 'tsx' || fileExt === 'ts' || fileExt === 'jsx' || fileExt === 'js' ? 'javascript' :
+                                        fileExt === 'ts' ? 'typescript' :
                                         fileExt === 'css' ? 'css' :
                                         fileExt === 'json' ? 'json' :
                                         fileExt === 'html' ? 'html' : 'text';
@@ -2004,20 +2039,17 @@ Tip: I automatically detect and install npm packages from your code imports (lik
           generatedFiles.push(match[1]);
         }
         
-        // Show appropriate message based on edit mode
+        // Finalize streaming content into a chat message
+        const finalContent = streamingAiContent.trim() || explanation || 'Code generated!';
+        setStreamingAiContent('');
+        
         if (isEdit && generatedFiles.length > 0) {
-          // For edits, show which file(s) were edited
           const editedFileNames = generatedFiles.map(f => f.split('/').pop()).join(', ');
-          addChatMessage(
-            explanation || `Updated ${editedFileNames}`,
-            'ai',
-            {
-              appliedFiles: [generatedFiles[0]] // Only show the first edited file
-            }
-          );
+          addChatMessage(finalContent || `Updated ${editedFileNames}`, 'ai', {
+            appliedFiles: [generatedFiles[0]]
+          });
         } else {
-          // For new generation, show all files
-          addChatMessage(explanation || 'Code generated!', 'ai', {
+          addChatMessage(finalContent, 'ai', {
             appliedFiles: generatedFiles
           });
         }
@@ -2723,8 +2755,13 @@ Focus on creating a polished, professional application that looks great and work
                     isThinking: false,
                     thinkingDuration: data.duration
                   }));
+                } else if (data.type === 'info') {
+                  setGenerationProgress(prev => ({
+                    ...prev,
+                    status: data.message || 'Working...'
+                  }));
                 } else if (data.type === 'conversation') {
-                  // Add conversational text to chat
+                  // Accumulate conversational text for streaming display
                   let text = data.text || '';
                   
                   // Remove package tags from the text
@@ -2735,7 +2772,7 @@ Focus on creating a polished, professional application that looks great and work
                   if (!text.includes('<file') && !text.includes('import React') && 
                       !text.includes('export default') && !text.includes('className=') &&
                       text.trim().length > 0) {
-                    addChatMessage(text.trim(), 'ai');
+                    setStreamingAiContent(prev => prev + text.trim() + '\n\n');
                   }
                 } else if (data.type === 'stream' && data.raw) {
                   setGenerationProgress(prev => {
@@ -2763,7 +2800,8 @@ Focus on creating a polished, professional application that looks great and work
                       // Only add if we haven't processed this file yet
                       if (!processedFiles.has(filePath)) {
                         const fileExt = filePath.split('.').pop() || '';
-                        const fileType = fileExt === 'jsx' || fileExt === 'js' ? 'javascript' :
+                        const fileType = fileExt === 'tsx' || fileExt === 'ts' || fileExt === 'jsx' || fileExt === 'js' ? 'javascript' :
+                                        fileExt === 'ts' ? 'typescript' :
                                         fileExt === 'css' ? 'css' :
                                         fileExt === 'json' ? 'json' :
                                         fileExt === 'html' ? 'html' : 'text';
@@ -2811,7 +2849,8 @@ Focus on creating a polished, professional application that looks great and work
                       
                       if (!processedFiles.has(filePath)) {
                         const fileExt = filePath.split('.').pop() || '';
-                        const fileType = fileExt === 'jsx' || fileExt === 'js' ? 'javascript' :
+                        const fileType = fileExt === 'tsx' || fileExt === 'ts' || fileExt === 'jsx' || fileExt === 'js' ? 'javascript' :
+                                        fileExt === 'ts' ? 'typescript' :
                                         fileExt === 'css' ? 'css' :
                                         fileExt === 'json' ? 'json' :
                                         fileExt === 'html' ? 'html' : 'text';
@@ -2861,9 +2900,12 @@ Focus on creating a polished, professional application that looks great and work
         if (generatedCode) {
           addChatMessage('AI app generation complete!', 'system');
           
-          // Add the explanation to chat if available
-          if (explanation && explanation.trim()) {
-            addChatMessage(explanation, 'ai');
+          // Finalize streaming content into a chat message
+          const finalContent = streamingAiContent.trim() || explanation || 'Code generated!';
+          setStreamingAiContent('');
+          
+          if (finalContent) {
+            addChatMessage(finalContent, 'ai');
           }
           
           setPromptInput(generatedCode);
@@ -2935,6 +2977,30 @@ Focus on creating a polished, professional application that looks great and work
     }, 500);
   };
 
+  const handleQuickTextEdit = async (oldText: string, newText: string) => {
+    updateStatus('Replacing text...', true);
+    try {
+      const res = await fetch('/api/replace-text-in-sandbox', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ oldText, newText, sandboxId: sandboxData?.sandboxId }),
+      });
+      const data = await res.json();
+      if (data.success && data.count > 0) {
+        updateStatus(`Replaced in ${data.count} file(s)`, false);
+        setPreviewKey(n => n + 1);
+      } else if (data.success && data.count === 0) {
+        updateStatus('Text not found in any file', false);
+      } else {
+        updateStatus('Replace failed', false);
+        addChatMessage(`❌ Failed to replace text: ${data.error || 'Unknown error'}`, 'system');
+      }
+    } catch (error: any) {
+      updateStatus('Replace failed', false);
+      addChatMessage(`❌ Failed to replace text: ${error.message}`, 'error');
+    }
+  };
+
   return (
     <div className="zip-page">
       <GenerationUI
@@ -2957,6 +3023,11 @@ Focus on creating a polished, professional application that looks great and work
           if (file) return file.content;
           return sandboxFiles[selectedFile] || '';
         })()}
+        sandboxId={sandboxData?.sandboxId}
+        streamingAiContent={streamingAiContent}
+        selectedElement={selectedElement}
+        onElementSelect={setSelectedElement}
+        onQuickTextEdit={handleQuickTextEdit}
       />
     </div>
   );

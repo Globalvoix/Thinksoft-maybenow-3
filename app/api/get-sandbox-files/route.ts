@@ -55,7 +55,7 @@ export async function GET() {
         // Check file size first
         const statResult = await global.activeSandbox.runCommand({
           cmd: 'stat',
-          args: ['-f', '%z', filePath]
+          args: ['-c', '%s', filePath]
         });
         
         if (statResult.exitCode === 0) {
@@ -124,12 +124,12 @@ export async function GET() {
         Object.assign(fileInfo, parseResult);
         
         // Identify entry point
-        if (relativePath === 'src/main.jsx' || relativePath === 'src/index.jsx') {
+        if (relativePath.match(/^src\/(main|index)\.(jsx?|tsx?)$/)) {
           fileManifest.entryPoint = fullPath;
         }
         
-        // Identify App.jsx
-        if (relativePath === 'src/App.jsx' || relativePath === 'App.jsx') {
+        // Identify App entry point
+        if (relativePath.match(/^(src\/)?App\.(jsx?|tsx?)$/)) {
           fileManifest.entryPoint = fileManifest.entryPoint || fullPath;
         }
       }
@@ -150,9 +150,17 @@ export async function GET() {
     fileManifest.routes = extractRoutes(fileManifest.files);
     
     // Update global file cache with manifest
-    if (global.sandboxState?.fileCache) {
-      global.sandboxState.fileCache.manifest = fileManifest;
+    if (!global.sandboxState) {
+      global.sandboxState = { fileCache: null, sandbox: null, sandboxData: null };
     }
+    if (!global.sandboxState.fileCache) {
+      global.sandboxState.fileCache = {
+        files: {},
+        lastSync: Date.now(),
+        sandboxId: '',
+      };
+    }
+    global.sandboxState.fileCache.manifest = fileManifest;
 
     return NextResponse.json({
       success: true,

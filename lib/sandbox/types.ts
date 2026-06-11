@@ -52,6 +52,19 @@ export abstract class SandboxProvider {
   abstract terminate(): Promise<void>;
   abstract isAlive(): boolean;
   
+  /**
+   * Extend the sandbox lifetime. Should be called periodically
+   * (e.g., every 2 minutes) to prevent the sandbox from timing out.
+   * Returns true if the timeout was successfully extended.
+   */
+  abstract keepAlive(): Promise<boolean>;
+  
+  /**
+   * Find all files containing oldText and replace every occurrence with newText.
+   * Returns the list of file paths that were changed.
+   */
+  abstract replaceText(oldText: string, newText: string): Promise<string[]>;
+  
   // Optional methods that providers can override
   async setupViteApp(): Promise<void> {
     // Default implementation for setting up a Vite React app

@@ -208,12 +208,13 @@ export function ConnectorsModal({ isOpen, onClose }: ConnectorsModalProps) {
             onClick={handleClose}
             className="fixed inset-0 bg-black/60 z-[100]"
           />
+          <div className="fixed inset-0 z-[101] flex items-center justify-center pointer-events-none">
           <motion.div
             initial={{ opacity: 0, scale: 0.95, y: 10 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.95, y: 10 }}
             transition={{ duration: 0.2, ease: "easeOut" }}
-            className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[95vw] max-w-[1200px] h-[92vh] max-h-[900px] bg-[#1a1a1a] rounded-[24px] shadow-2xl z-[101] flex flex-col overflow-hidden border border-white/10"
+            className="w-[95vw] max-w-[1200px] h-[92vh] max-h-[900px] bg-[#1a1a1a] rounded-[24px] shadow-2xl flex flex-col overflow-hidden border border-white/10 pointer-events-auto"
           >
             {/* Header */}
             <div className="flex items-center justify-between p-4 border-b border-[#222]">
@@ -360,6 +361,7 @@ export function ConnectorsModal({ isOpen, onClose }: ConnectorsModalProps) {
             <div className="absolute bottom-0 inset-x-0 h-8 bg-gradient-to-t from-[#0a0a0a] to-transparent pointer-events-none" />
 
           </motion.div>
+          </div>
         </>
       )}
     </AnimatePresence>

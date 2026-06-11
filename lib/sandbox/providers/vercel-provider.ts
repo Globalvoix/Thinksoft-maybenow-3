@@ -1,6 +1,6 @@
 import { Sandbox } from '@vercel/sandbox';
 import { SandboxProvider, SandboxInfo, CommandResult } from '../types';
-// SandboxProviderConfig available through parent class
+import { appConfig } from '@/config/app.config';
 
 export class VercelProvider extends SandboxProvider {
   private existingFiles: Set<string> = new Set();
@@ -24,7 +24,7 @@ export class VercelProvider extends SandboxProvider {
       // Create Vercel sandbox
       
       const sandboxConfig: any = {
-        timeout: 300000, // 5 minutes in ms
+        timeout: appConfig.vercelSandbox.timeoutMs,
         runtime: 'node22', // Use node22 runtime for Vercel sandboxes
         ports: [5173] // Vite port
       };
@@ -355,11 +355,39 @@ export class VercelProvider extends SandboxProvider {
         vite: "^4.3.9",
         tailwindcss: "^3.3.0",
         postcss: "^8.4.31",
-        autoprefixer: "^10.4.16"
+        autoprefixer: "^10.4.16",
+        typescript: "^5.3.0",
+        "@types/react": "^18.2.0",
+        "@types/react-dom": "^18.2.0"
       }
     };
     
     await this.writeFile('package.json', JSON.stringify(packageJson, null, 2));
+    
+    // Create tsconfig.json
+    const tsconfigJson = `{
+  "compilerOptions": {
+    "target": "ES2020",
+    "useDefineForClassFields": true,
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "skipLibCheck": true,
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "isolatedModules": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "strict": true,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "noFallthroughCasesInSwitch": true,
+    "forceConsistentCasingInFileNames": true
+  },
+  "include": ["src"]
+}`;
+    
+    await this.writeFile('tsconfig.json', tsconfigJson);
     
     // Create vite.config.js
     const viteConfig = `import { defineConfig } from 'vite'
@@ -420,28 +448,28 @@ export default {
   </head>
   <body>
     <div id="root"></div>
-    <script type="module" src="/src/main.jsx"></script>
+    <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>`;
     
     await this.writeFile('index.html', indexHtml);
     
-    // Create src/main.jsx
-    const mainJsx = `import React from 'react'
+    // Create src/main.tsx
+    const mainTsx = `import React from 'react'
 import ReactDOM from 'react-dom/client'
-import App from './App.jsx'
+import App from './App'
 import './index.css'
 
-ReactDOM.createRoot(document.getElementById('root')).render(
+ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <App />
   </React.StrictMode>,
 )`;
     
-    await this.writeFile('src/main.jsx', mainJsx);
+    await this.writeFile('src/main.tsx', mainTsx);
     
-    // Create src/App.jsx
-    const appJsx = `function App() {
+    // Create src/App.tsx
+    const appTsx = `function App() {
   return (
     <div className="min-h-screen bg-gray-900 text-white flex items-center justify-center p-4">
       <div className="text-center max-w-2xl">
@@ -456,7 +484,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
 
 export default App`;
     
-    await this.writeFile('src/App.jsx', appJsx);
+    await this.writeFile('src/App.tsx', appTsx);
     
     // Create src/index.css
     const indexCss = `@tailwind base;
@@ -534,11 +562,12 @@ body {
     await new Promise(resolve => setTimeout(resolve, 7000));
     
     // Track initial files
-    this.existingFiles.add('src/App.jsx');
-    this.existingFiles.add('src/main.jsx');
+    this.existingFiles.add('src/App.tsx');
+    this.existingFiles.add('src/main.tsx');
     this.existingFiles.add('src/index.css');
     this.existingFiles.add('index.html');
     this.existingFiles.add('package.json');
+    this.existingFiles.add('tsconfig.json');
     this.existingFiles.add('vite.config.js');
     this.existingFiles.add('tailwind.config.js');
     this.existingFiles.add('postcss.config.js');
@@ -596,5 +625,61 @@ body {
 
   isAlive(): boolean {
     return !!this.sandbox;
+  }
+
+  async keepAlive(): Promise<boolean> {
+    if (!this.sandbox) return false;
+    try {
+      const result = await this.runCommand('echo "keepalive"');
+      return result.success;
+    } catch {
+      return false;
+    }
+  }
+
+  async replaceText(oldText: string, newText: string): Promise<string[]> {
+    if (!this.sandbox) return [];
+    const pOld = oldText.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, '\\n').replace(/\r/g, '');
+    const pNew = newText.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, '\\n').replace(/\r/g, '');
+    const pythonCode = `
+import os,glob
+old = '${pOld}'
+new_text = '${pNew}'
+root = '/vercel/sandbox'
+changed = []
+exclude_dirs = {'node_modules','.git','dist','.next'}
+exts = ('*.tsx','*.ts','*.jsx','*.js','*.css','*.html')
+for ext in exts:
+    for fp in glob.glob(os.path.join(root,'**',ext),recursive=True):
+        parts = fp.replace('\\\\','/').split('/')
+        if any(e in parts for e in exclude_dirs): continue
+        try:
+            with open(fp,'r',encoding='utf-8',errors='ignore') as f:
+                content = f.read()
+            if old in content:
+                new_content = content.replace(old,new_text)
+                with open(fp,'w',encoding='utf-8') as f:
+                    f.write(new_content)
+                changed.append(fp)
+        except: pass
+print('\\n'.join(changed) if changed else 'NO_CHANGES')
+`;
+    try {
+      const result = await (this.sandbox as any).runCommand({
+        cmd: 'python3',
+        args: ['-c', pythonCode],
+        cwd: '/vercel/sandbox',
+        env: {}
+      });
+      let stdout = '';
+      try {
+        stdout = typeof result.stdout === 'function' ? await result.stdout() : (result.stdout || '');
+      } catch {}
+      if (!stdout.trim() || stdout === 'NO_CHANGES') return [];
+      return stdout.split('\n').filter((f: string) => f.trim());
+    } catch (e) {
+      console.error('[VercelProvider] replaceText failed:', e);
+      return [];
+    }
   }
 }

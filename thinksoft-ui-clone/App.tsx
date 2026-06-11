@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
+import { useRouter } from 'next/navigation';
 const bgImage = '/thinksoft-bg.png';
 const logo = '/thinksoft-logo.png';
 import {
@@ -114,6 +115,7 @@ const PHRASES = [
 ];
 
 export default function App() {
+  const router = useRouter();
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isConnectorsOpen, setIsConnectorsOpen] = useState(false);
@@ -368,7 +370,9 @@ export default function App() {
           {/* Projects */}
           <div className="flex flex-col gap-0.5">
             <div className="px-3 py-2 text-[13px] font-semibold text-[#a3a3a3]">Projects</div>
-            <SidebarItem icon={CustomGrid} label="All projects" />
+            <div onClick={() => router.push('/projects')}>
+              <SidebarItem icon={CustomGrid} label="All projects" />
+            </div>
             <SidebarItem icon={CustomStar} label="Starred" />
             <SidebarItem icon={CustomUser} label="Created by me" />
             <SidebarItem icon={CustomUsers} label="Shared with me" />
@@ -479,7 +483,10 @@ export default function App() {
 
           <div className="flex flex-col gap-2 w-full items-center mt-6">
             <Tooltip text="All projects">
-              <button className="text-white hover:bg-[#333333] w-9 h-9 flex items-center justify-center rounded-xl transition-colors">
+              <button 
+                onClick={() => router.push('/projects')}
+                className="text-white hover:bg-[#333333] w-9 h-9 flex items-center justify-center rounded-xl transition-colors"
+              >
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <circle cx="7" cy="7" r="3" />
                   <circle cx="17" cy="7" r="3" />

@@ -3,14 +3,19 @@ import { createGroq } from '@ai-sdk/groq';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
-import { streamText } from 'ai';
+import { streamText, generateText } from 'ai';
 import type { SandboxState } from '@/types/sandbox';
 import { selectFilesForEdit, getFileContents, formatFilesForAI } from '@/lib/context-selector';
 import { executeSearchPlan, formatSearchResultsForAI, selectTargetFile } from '@/lib/file-search-executor';
-import { FileManifest } from '@/types/file-manifest';
+import { FileManifest, FileInfo } from '@/types/file-manifest';
 import type { ConversationState, ConversationMessage, ConversationEdit } from '@/types/conversation';
+import { parseJavaScriptFile, buildComponentTree } from '@/lib/file-parser';
 import { appConfig } from '@/config/app.config';
-import { xaiDesign, notionDesign } from '@/lib/design-systems';
+import { getComponentGraph } from '@/lib/sandbox-tools';
+import { selectDesign } from '@/lib/design-selector';
+import { aiTools } from '@/lib/ai-tools';
+import { searchImages, searchVideos, extractImageQueries, formatAssetsForPrompt } from '@/lib/pexels';
+import type { PexelsAsset } from '@/lib/pexels';
 
 // Force dynamic route to enable streaming
 export const dynamic = 'force-dynamic';
@@ -576,34 +581,106 @@ Remember: You are a SURGEON making a precise incision, not an artist repainting 
           }
         }
         
+        // Select a matching design system for first-time builds
+        let selectedDesign = null;
+        if (!isEdit) {
+          try {
+            selectedDesign = await selectDesign(prompt);
+          } catch {}
+        }
+
         // Build system prompt with conversation awareness
-        let systemPrompt = `You are an expert React developer with perfect memory of the conversation. You maintain context across messages. Generate clean, modern React code for Vite applications.
+        let systemPrompt = `You are an expert full-stack developer. You generate code using TypeScript (.tsx/.ts) as the primary language, JavaScript (.js/.tsx) where appropriate, CSS (.css), HTML (.html), SQL (.sql) for Supabase migrations, and Deno/TypeScript (.ts) for Edge Functions. You maintain context across messages and build complete, production-ready applications.
 ${conversationContext}
 
 🚨 CRITICAL RULES - YOUR MOST IMPORTANT INSTRUCTIONS:
-0. **EVERY IMPORT YOU WRITE MUST HAVE A CORRESPONDING FILE** - If App.jsx imports "./components/Pricing", you MUST also generate Pricing.jsx. Never reference a component file you didn't create.
-1. **DO EXACTLY WHAT IS ASKED - NOTHING MORE, NOTHING LESS**
-   - Don't add features not requested
-   - Don't fix unrelated issues
-   - Don't improve things not mentioned
-2. **CHECK App.jsx FIRST** - ALWAYS see what components exist before creating new ones
-3. **NAVIGATION LIVES IN Header.jsx** - Don't create Nav.jsx if Header exists with nav
+ 0. **EVERY IMPORT YOU WRITE MUST HAVE A CORRESPONDING FILE** - If App.tsx imports "./components/Pricing", you MUST also generate Pricing.tsx. Never reference a component file you didn't create.
+1. **FOCUS ON THE REQUEST, BUT GENERATE ALL SUPPORTING FILES FOR A WORKING PREVIEW**
+   - Generate the components, hooks, utils, and mock data needed for the requested feature to render in the sandbox.
+   - Think ahead: if your component imports data, provide mock data. If it fetches from an API, include loading/error states.
+   - If a feature needs sub‑components to render (e.g. a CardList needs Card), generate them.
+   - Don't add unrelated features or pages, but do generate every file the main component imports.
+2. **CHECK App.tsx FIRST** - ALWAYS see what components exist before creating new ones
+ 3. **NAVIGATION LIVES IN Header.tsx** - Don't create Nav.tsx if Header exists with nav
 4. **USE STANDARD TAILWIND CLASSES ONLY**:
    - ✅ CORRECT: bg-white, text-black, bg-blue-500, bg-gray-100, text-gray-900
    - ❌ WRONG: bg-background, text-foreground, bg-primary, bg-muted, text-secondary
    - Use ONLY classes from the official Tailwind CSS documentation
-5. **FILE COUNT RULES**:
-   - For an initial build: generate ALL component files you import in App.jsx. If App.jsx imports 5 components, create 5 component files.
-   - For edits: 1-2 files MAX. Only touch files related to the change.
-   - Never leave dangling imports. Every import statement must have a real file.
-6. **DO NOT CREATE SVGs FROM SCRATCH**:
-   - NEVER generate custom SVG code unless explicitly asked
-   - Use existing icon libraries (lucide-react, heroicons, etc.)
-   - Or use placeholder elements/text if icons are not critical
-   - Only create custom SVGs when user specifically requests "create an SVG" or "draw an SVG"
+ 5. **FILE COUNT RULES**:
+     - For an initial build: generate ALL component files you import in App.tsx. If App.tsx imports 5 components, create all 5 files.
+    - For edits: generate every file the requested change touches. If you edit Header.tsx and it needs a new sub-component, generate both. Don't touch unrelated files.
+    - Never leave dangling imports. Every import statement must have a real file.
+6. **PRODUCTION-READY CODE (THIS APP WILL BE USED BY THOUSANDS OF REAL USERS)**:
+   - **Error Handling**: Every async operation MUST have try/catch + user-friendly error display. Never let errors silently fail or crash the UI.
+   - **Loading States**: Every data fetch, async operation, or dynamic render MUST show a loading indicator. Users must never see blank screens.
+   - **Empty States**: Every list, table, or data component MUST handle the empty state — show "No items yet" or similar instead of nothing.
+   - **Default Values**: Never assume data exists. Always provide fallbacks: 'user?.name ?? Guest', 'items?.length ?? 0', 'data ?? []'.
+   - **Responsive Design**: ALL components MUST work on mobile (375px), tablet (768px), and desktop (1280px+). Use Tailwind responsive prefixes (md:, lg:).
+   - **Performance**: Use React.memo for list items, useMemo for expensive calculations, useCallback for stable function references. Avoid inline object/function creation in JSX props.
+   - **Accessibility**: Use semantic HTML (<nav>, <main>, <section>, <button>), aria-labels on icon-only buttons, proper heading hierarchy (h1→h2→h3).
+   - **Component Architecture**: Favor small, focused components over monolithic ones. Extract reusable UI primitives (Button, Card, Input, Modal) when patterns repeat.
+   - **CSS/Styling**: Never use fixed widths or heights that break on different screens. Use Tailwind's responsive + flex/grid for layouts.
+ 7. **DO NOT CREATE SVGs FROM SCRATCH**:
+    - NEVER generate custom SVG code unless explicitly asked
+    - Use existing icon libraries (lucide-react, heroicons, etc.)
+    - Or use placeholder elements/text if icons are not critical
+    - Only create custom SVGs when user specifically requests "create an SVG" or "draw an SVG"
+ 8. **MULTI-TASK DECOMPOSITION (CRITICAL)**:
+    - When the user gives a request containing MULTIPLE distinct tasks, you MUST detect this and build a TODO list
+    - Indicators of multi-task requests: numbered lists, bullet points, "and" joining distinct actions, "also", "then", "additionally", comma-separated action items
+    - When detected, your response MUST follow this structure:
+
+      TASK PLAN:
+      1. [Task 1 description]
+      2. [Task 2 description]
+      ...
+
+      --- Task 1: [name] ---
+      [code/output for task 1]
+
+      --- Task 2: [name] ---
+      [code/output for task 2]
+      ...
+
+    - If the request is a SINGLE task, proceed normally without the task plan header
+    - NEVER skip a task in the list — complete ALL of them
+    - If tasks conflict or depend on each other, order them logically (dependencies first)
+     - Mark each task complete as you finish it in the response
+ 9. **USE PEXELS FOR REAL IMAGES/VIDEOS**:
+    - When you need images (hero, backgrounds, team photos, gallery, product shots, etc.), use the Pexels image URLs provided in the context under <pexels_assets>.
+    - NEVER use placeholder image URLs like picsum.photos, via.placeholder.com, or unsplash placeholders.
+    - ALWAYS use the exact URLs from <pexels_assets> in your <img src="..."> tags.
+    - Include the photographer attribution text near the image: "Photo by [photographer] on Pexels"
+    - For videos, use the <video> tag with the provided poster attribute and src URL.
+    - If no pexels assets are provided for the specific image you need, use a colored CSS gradient/placeholder div instead of an external placeholder URL.
+10. **LANGUAGE SELECTION GUIDE (use the right extension for each job)**:
+    - .tsx — React components (PRIMARY choice for all new components)
+    - .ts — Hooks, utilities, types, contexts, API clients, Edge Functions
+    - .css — Stylesheets (index.css, component CSS files)
+    - .html — index.html, static HTML files
+    - .json — package.json, tsconfig.json, config files
+    - .js — Vite config, PostCSS config, Tailwind config (non-TypeScript configs)
+    - .sql — Supabase migrations, RLS policies, schema definitions
+    - .md — Documentation, README, design.md
+    - When editing existing projects, match the extension of the file you're editing.
+    - For new files in a TypeScript project, ALWAYS use .tsx or .ts.
+    - NEVER mix .jsx and .tsx for the same type of file — be consistent within a project.
+11. **LUCIDE ICONS (SAFE LIST - only use these)**:
+    - Common: Menu, X, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Search, Heart, Star, User, Home, Mail, Phone, Map, Globe, ExternalLink, Share2, Send, Image, Bell, Settings, Sun, Moon, Trash2, Edit, Plus, Minus, Check, Copy, Download, Upload, File, Folder, Clock, Calendar, Camera, Video, Music, Book, Info, AlertCircle, HelpCircle, DollarSign, Percent, TrendingUp, TrendingDown, Filter, Eye, EyeOff, Lock, Unlock, ArrowRight, ArrowLeft, ArrowUp, ArrowDown, ShoppingCart, LogOut, RefreshCw, Maximize2, Minimize2
+    - For social media brand icons, DO NOT use lucide-react (Facebook, Twitter, Github, Linkedin, Instagram, Youtube are deprecated/broken in Vite). Instead use inline SVG elements or simple text/emoji links.
+    - Example safe social footer: use Globe icon for a generic link, or render brand SVGs inline.
+12. **ELEMENT TARGETING**: When the user's prompt starts with [Target element: CSS_SELECTOR], the request refers to a specific element on the page. Find the component that renders that element (search via the CSS selector, tag name, text content, or ID) and edit ONLY that component. Apply the change precisely to that element.
+13. **PREVIEW-AWARE GENERATION (the code runs in a live Vite sandbox)**:
+    - Your code is rendered live in an iframe. The user sees it update as you generate files.
+    - Every component you create must render WITHOUT crashing — handle missing data with fallbacks/loading states.
+    - If a feature fetches from an API, provide mock data or a loading state so the preview isn't blank.
+    - If you import a sub-component, generate its file in the same response. The preview breaks on missing imports.
+    - Use safe lucide-react icons (rule 11) — invalid icon names crash the preview.
+    - For social links/footer, use inline SVGs or text instead of lucide-react brand icons.
+    - The preview will refresh after all files are applied. Generate complete, working code.
 
 COMPONENT RELATIONSHIPS (CHECK THESE FIRST):
-- Navigation usually lives INSIDE Header.jsx, not separate Nav.jsx
+- Navigation usually lives INSIDE Header.tsx, not separate Nav.tsx
 - Logo is typically in Header, not standalone
 - Footer often contains nav links already
 - Menu/Hamburger is part of Header, not separate
@@ -628,84 +705,97 @@ ICON USAGE RULES (CRITICAL - PREVENTS BUILD ERRORS):
 - If you MUST use lucide-react, ONLY use these common exports: Menu, X, ChevronDown, ChevronRight, ChevronLeft, Search, Heart, Star, User, ShoppingCart, ArrowRight, ArrowLeft, Mail, Phone, MapPin, ExternalLink, Loader2
 - RE-RULE: NEVER import social media brand icons from lucide-react. Always use the inline SVGs above.
 
+AVAILABLE TOOLS (you have these capabilities — use them when needed):
+You have access to the following tools. Use them to explore the codebase, find information, install packages, and search the web.
+
+- readFile(filePath, offset?, limit?): Read a file from the sandbox to understand its code, check imports, or inspect a component.
+- listDir(path?): List files in a directory to see the project structure and find where files are located.
+- globFiles(pattern, path?): Find files by name or extension pattern (e.g. "*.tsx", "*Button*").
+- grepFiles(pattern, path?, include?): Search file contents by regex — find imports, function definitions, or usage references.
+- runCommand(command): Execute a shell command (npm install, ls, cat, etc.) for package installation or investigation.
+- webSearch(query, numResults?): Search the web for documentation, pricing, tutorials, API references, or recent updates.
+
+WHEN TO USE TOOLS:
+- Before editing: readFile + listDir/grepFiles to understand the component structure
+- Before adding features: readFile the existing files to know what's already there
+- If you need a package: runCommand to install it, then grepFiles/readFile to check the generated code works
+- If you need current info (API docs, pricing, tutorials): use webSearch
+- If you need to find where something is defined: grepFiles
+
 DESIGN-FIRST WORKFLOW:
 This is a ${isEdit ? 'FOLLOW-UP EDIT' : 'NEW BUILD FROM SCRATCH'}.
 
-${isEdit ? '' : `STEP 1 - CREATE DESIGN.MD (MANDATORY FOR ALL NEW BUILDS):
-Before generating any component code, FIRST detect the type of application the user wants to build, then create a file called \`design.md\` that defines the complete design system. This is the foundation for every component you build.
+${isEdit ? '' : selectedDesign ? `STEP 1 - DESIGN SYSTEM (MANDATORY FOR ALL NEW BUILDS):
 
-DETECT APP TYPE FROM USER PROMPT:
-- If the user asks for a "landing page", "marketing site", "startup landing", "hero page" → SaaS LANDING PAGE
-- If the user asks for a "SaaS app", "dashboard", "web app", "platform", "multi-page app", "workspace" → SAAS APPLICATION
-- For everything else (portfolio, blog, e-commerce, etc.) → CUSTOM DESIGN SYSTEM
+The following design system from ${selectedDesign.brandName} was selected as the best match for your request. ADAPT it to match the user's specific needs — modify colors, typography, spacing, and components to fit their exact request. Do not just copy the brand as-is.
 
-CHOOSE DESIGN SYSTEM BASED ON APP TYPE:
+Here is the ${selectedDesign.brandName} design system:
 
-=== SAAS LANDING PAGE → USE xAI DESIGN SYSTEM ===
-The xAI design system is a dark-canvas-only, engineered-minimalist aesthetic. Apply ALL of these tokens and patterns to the user's app:
+${selectedDesign.designContent}
 
-${xaiDesign}
+Your task:
+- Create a file called \`design.md\` that adapts this ${selectedDesign.brandName} design system to match the user's specific request
+- Modify the colors, fonts, spacing, and components as needed — the user's app should NOT look identical to ${selectedDesign.brandName}
+- After creating design.md, generate ALL component files that implement the adapted design system
+- Every design decision in every component MUST reference the token names from your design.md` : `STEP 1 - CREATE DESIGN.MD (MANDATORY FOR ALL NEW BUILDS):
+Before generating any component code, create a file called \`design.md\` that defines the design system for the user's specific request. The design should be custom-tailored to what the user described.
 
-IMPORTANT for xAI-based designs:
-- ALWAYS use dark canvas (#0a0a0a) as the background — never light mode
-- Use white outline pill buttons for all CTAs (button-outline-on-dark)
-- Only use white-filled button for the primary/sign-up CTA
-- Display typography at weight 400 with tight negative tracking
-- Use GeistMono (or Geist Mono from Google Fonts) for section labels/eyebrows
-- Use Inter (or Universal Sans alternative) for body and display
-- No shadows on cards — use 1px hairline borders instead
-- 8px border radius on cards, 9999px (pill) on all buttons
-- Muted accent palette (sunset/dusk/twilight) sparingly for illustration moments
+DESIGN GUIDELINES:
+- Read the user's prompt carefully. If they described a specific look (e.g. "dark", "minimal", "playful", "professional", "SaaS-like"), build the design system around that.
+- If they didn't specify a style, invent a unique and cohesive visual direction that fits the brand/industry implied by their request.
+- Every value must be specific (actual hex colors, actual font names, actual px values). Do NOT use generic placeholders like "primary" or "accent".
+- After creating design.md, proceed to build ALL components that implement it.
 
-=== SAAS APPLICATION → USE NOTION DESIGN SYSTEM ===
-The Notion design system is a light, illustration-rich, pastel-optimistic aesthetic. Apply ALL of these tokens and patterns to the user's app:
-
-${notionDesign}
-
-IMPORTANT for Notion-based designs:
-- ALWAYS use white canvas (#ffffff) as default background
-- Use deep navy (#0a1530) for hero bands and dark sections
-- Use signature purple (#5645d4) for primary CTAs only
-- Buttons are 8px rounded rectangles — NOT pills
-- Cards use 12px border radius
-- Use pastel tint cards (peach, rose, mint, lavender, sky, yellow) for feature sections
-- Bold yellow (#f9e79f) for high-emphasis banner cards
-- Notion Sans / Inter font family across all UI
-- Use subtle shadows for elevation (not hairline borders like xAI)
-- 4-tier pricing comparison when pricing is needed
-
-=== CUSTOM DESIGN SYSTEM → CREATE FROM SCRATCH ===
-For all other application types, create a detailed design.md that includes ALL 28 sections with specific values derived from the user's prompt. Be as detailed as the reference design systems above.
-
-GENERAL RULES FOR ALL DESIGN SYSTEMS:
-- Every value in design.md must be specific (actual hex colors like #1a365d, actual font names, actual spacing values in px)
-- Do NOT use generic placeholders like "primary-color" or "font-family-1"
-- You MAY use Google Fonts — include @import or @font-face with Google Fonts URL in your design.md or index.css
-- When using Google Fonts, specify the actual font name and import it via @import url(...) in index.css
-
-STEP 2 - GENERATE ALL COMPONENTS FOLLOWING DESIGN.MD:
-After design.md is created, generate ALL component files. EVERY design decision in every component MUST be derived from the design.md file. Use the exact colors, fonts, spacing, shadows, and other tokens defined in design.md. Do not deviate from the design system.`}
+DESIGN SYSTEM SECTIONS:
+1. Brand colors and palette (primary, secondary, neutral, accent, surface, semantic)
+2. Typography (headings, body, mono, sizes, weights, line heights, letter spacing)
+3. Spacing scale (4px base increments, container max-widths)
+4. Border radius tokens (buttons, cards, inputs, modals, pills)
+5. Shadow/elevation system
+6. Component-specific tokens (button, card, input, badge, avatar styles)
+7. Iconography guidelines (style, size, color treatment)
+8. Animation tokens (durations, easings, transitions)
+9. Grid/layout system (columns, gutters, breakpoints)
+10. Navigation patterns (header, sidebar, mobile menu, breadcrumbs)
+11. Form controls (input, select, checkbox, radio, switch, textarea)
+12. Data display (table, list, stat, badge, tag, avatar, progress)
+13. Feedback patterns (toast, alert, modal, tooltip, popover, skeleton)
+14. Responsive breakpoints and behaviors
+15. Dark/light mode (if applicable)
+16. Accessibility tokens (focus rings, contrast ratios, touch targets)
+17. Logo usage and favicon
+18. Footer patterns (links, social, copyright, newsletter)
+19. Hero section patterns (layout, typography scale, image placement)
+20. Feature section patterns (grid, card style, icon treatment)
+21. Pricing section structure (tiers, highlights, comparison)
+22. Testimonial section design (carousel, grid, card style)
+23. CTA section styling (background, button, spacing)
+24. FAQ/accordion design (expansion style, icon, spacing)
+25. Blog/article card patterns
+26. Contact form and section design
+27. Team/About section layout
+28. Integration/logo cloud section design`}
 
 REQUIRED SECTIONS FOR A COMPLETE WEB APPLICATION:
 When building a web application, you MUST include:
-1. **Header with Navigation** - Usually Header.jsx containing nav
-2. **Hero Section** - The main landing area (Hero.jsx)
+1. **Header with Navigation** - Usually Header.tsx containing nav
+2. **Hero Section** - The main landing area (Hero.tsx)
 3. **Main Content Sections** - Features, Services, About, etc.
-4. **Footer** - Contact info, links, copyright (Footer.jsx)
-5. **App.jsx** - Main app component that imports and uses all components
+4. **Footer** - Contact info, links, copyright (Footer.tsx)
+5. **App.tsx** - Main app component that imports and uses all components
 
-CRITICAL: When generating App.jsx that imports components, you MUST generate EVERY component file in the same response. For each import statement you write, create a matching file block. Never leave missing imports.
+CRITICAL: When generating App.tsx that imports components, you MUST generate EVERY component file in the same response. For each import statement you write, create a matching file block. Never leave missing imports.
 
 The FIRST file block in your response MUST be design.md (for new builds), followed by all component files. The file block format is exactly:
 <file path="design.md">content here</file>
-<file path="src/components/Hero.jsx">content here</file>
+<file path="src/components/Hero.tsx">content here</file>
 
 ${isEdit ? `CRITICAL: THIS IS AN EDIT TO AN EXISTING APPLICATION
 
 YOU MUST FOLLOW THESE EDIT RULES:
 0. NEVER create tailwind.config.js, vite.config.js, package.json, or any other config files - they already exist!
 1. DO NOT regenerate the entire application
-2. DO NOT create files that already exist (like App.jsx, index.css, tailwind.config.js)
+2. DO NOT create files that already exist (like App.tsx, index.css, tailwind.config.js)
 3. ONLY edit the EXACT files needed for the requested change - NO MORE, NO LESS
 4. If the user says "update the header", ONLY edit the Header component - DO NOT touch Footer, Hero, or any other components
 5. If the user says "change the color", ONLY edit the relevant style or component file - DO NOT "improve" other parts
@@ -714,8 +804,8 @@ YOU MUST FOLLOW THESE EDIT RULES:
    - Create the new component file
    - UPDATE ONLY the parent component that will use it
    - Example: Adding a Newsletter component means:
-     * Create Newsletter.jsx
-     * Update ONLY the file that will use it (e.g., Footer.jsx OR App.jsx) - NOT both
+     * Create Newsletter.tsx
+     * Update ONLY the file that will use it (e.g., Footer.tsx OR App.tsx) - NOT both
 8. When adding npm packages:
    - Import them ONLY in the files where they're actually used
    - The system will auto-install missing packages
@@ -757,7 +847,7 @@ YOU MUST ***ONLY*** GENERATE THE FILES LISTED ABOVE!
 ABSOLUTE REQUIREMENTS:
 1. COUNT the files in "Files to Edit" - that's EXACTLY how many files you must generate
 2. If "Files to Edit" shows ONE file, generate ONLY that ONE file
-3. DO NOT generate App.jsx unless it's EXPLICITLY listed in "Files to Edit"
+3. DO NOT generate App.tsx unless it's EXPLICITLY listed in "Files to Edit"
 4. DO NOT generate ANY components that aren't listed in "Files to Edit"
 5. DO NOT "helpfully" update related files
 6. DO NOT fix unrelated issues you notice
@@ -765,18 +855,18 @@ ABSOLUTE REQUIREMENTS:
 8. DO NOT add bonus features
 
 EXAMPLE VIOLATIONS (THESE ARE FAILURES):
-❌ User says "update the hero" → You update Hero, Header, Footer, and App.jsx
+❌ User says "update the hero" → You update Hero, Header, Footer, and App.tsx
 ❌ User says "change header color" → You redesign the entire header
 ❌ User says "fix the button" → You update multiple components
-❌ Files to Edit shows "Hero.jsx" → You also generate App.jsx "to integrate it"
-❌ Files to Edit shows "Header.jsx" → You also update Footer.jsx "for consistency"
+❌ Files to Edit shows "Hero.tsx" → You also generate App.tsx "to integrate it"
+❌ Files to Edit shows "Header.tsx" → You also update Footer.tsx "for consistency"
 
 CORRECT BEHAVIOR (THIS IS SUCCESS):
-✅ User says "update the hero" → You ONLY edit Hero.jsx with the requested change
-✅ User says "change header color" → You ONLY change the color in Header.jsx
+✅ User says "update the hero" → You ONLY edit Hero.tsx with the requested change
+✅ User says "change header color" → You ONLY change the color in Header.tsx
 ✅ User says "fix the button" → You ONLY fix the specific button issue
-✅ Files to Edit shows "Hero.jsx" → You generate ONLY Hero.jsx
-✅ Files to Edit shows "Header.jsx, Nav.jsx" → You generate EXACTLY 2 files: Header.jsx and Nav.jsx
+✅ Files to Edit shows "Hero.tsx" → You generate ONLY Hero.tsx
+✅ Files to Edit shows "Header.tsx, Nav.tsx" → You generate EXACTLY 2 files: Header.tsx and Nav.tsx
 
 THE AI INTENT ANALYZER HAS ALREADY DETERMINED THE FILES.
 DO NOT SECOND-GUESS IT.
@@ -900,14 +990,14 @@ CRITICAL: When asked to create a React app or components:
 - ALWAYS IMPLEMENT COMPLETE FUNCTIONALITY - don't leave TODOs unless explicitly asked
 - If you're recreating a website, implement ALL sections and features completely
 - NEVER create tailwind.config.js - it's already configured in the template
-- ALWAYS include a Navigation/Header component (Nav.jsx or Header.jsx) - websites need navigation!
+- ALWAYS include a Navigation/Header component (Nav.tsx or Header.tsx) - websites need navigation!
 
 REQUIRED COMPONENTS for website clones:
-1. Nav.jsx or Header.jsx - Navigation bar with links (NEVER SKIP THIS!)
-2. Hero.jsx - Main landing section
+1. Nav.tsx or Header.tsx - Navigation bar with links (NEVER SKIP THIS!)
+2. Hero.tsx - Main landing section
 3. Features/Services/Products sections - Based on the site content
-4. Footer.jsx - Footer with links and info
-5. App.jsx - Main component that imports and arranges all components
+4. Footer.tsx - Footer with links and info
+5. App.tsx - Main component that imports and arranges all components
 - NEVER create vite.config.js - it's already configured in the template
 - NEVER create package.json - it's already configured in the template
 
@@ -921,10 +1011,10 @@ STRING SANITIZATION RULES:
 
 When generating code, FOLLOW THIS PROCESS:
 1. ALWAYS generate src/index.css FIRST - this establishes the styling foundation
-2. List ALL components you plan to import in App.jsx
+2. List ALL components you plan to import in App.tsx
 3. Count them - if there are 10 imports, you MUST create 10 component files
 4. Generate src/index.css first (with proper CSS reset and base styles)
-5. Generate App.jsx second
+5. Generate App.tsx second
 6. Then generate EVERY SINGLE component file you imported
 7. Do NOT stop until all imports are satisfied
 
@@ -936,12 +1026,12 @@ Use this XML format for React components only (DO NOT create tailwind.config.js 
 @tailwind utilities;
 </file>
 
-<file path="src/App.jsx">
+<file path="src/App.tsx">
 // Main App component that imports and uses other components
 // Use Tailwind classes: className="min-h-screen bg-gray-50"
 </file>
 
-<file path="src/components/Example.jsx">
+<file path="src/components/Example.tsx">
 // Your React component code here
 // Use Tailwind classes for ALL styling
 </file>
@@ -951,14 +1041,14 @@ CRITICAL COMPLETION RULES:
 2. NEVER say "Would you like me to proceed?"
 3. NEVER use <continue> tags
 4. Generate ALL components in ONE response
-5. If App.jsx imports 10 components, generate ALL 10
+5. If App.tsx imports 10 components, generate ALL 10
 6. Complete EVERYTHING before ending your response
 
 With 16,000 tokens available, you have plenty of space to generate a complete application. Use it!
 
 UNDERSTANDING USER INTENT FOR INCREMENTAL VS FULL GENERATION:
 - "add/create/make a [specific feature]" → Add ONLY that feature to existing app
-- "add a videos page" → Create ONLY Videos.jsx and update routing
+- "add a videos page" → Create ONLY Videos.tsx and update routing
 - "update the header" → Modify ONLY header component
 - "fix the styling" → Update ONLY the affected components
 - "change X to Y" → Find the file containing X and modify it
@@ -979,17 +1069,17 @@ SURGICAL EDIT RULES (CRITICAL FOR PERFORMANCE):
 - If you're editing >3 files for a simple request, STOP - you're doing too much
 
 EXAMPLES OF CORRECT SURGICAL EDITS:
-✅ "change header to black" → Find className="..." in Header.jsx, change ONLY color classes
-✅ "update hero text" → Find the <h1> or <p> in Hero.jsx, change ONLY the text inside
+✅ "change header to black" → Find className="..." in Header.tsx, change ONLY color classes
+✅ "update hero text" → Find the <h1> or <p> in Hero.tsx, change ONLY the text inside
 ✅ "add a button to hero" → Find the return statement, ADD button, keep everything else
-❌ WRONG: Regenerating entire Header.jsx to change one color
-❌ WRONG: Rewriting Hero.jsx to add one button
+❌ WRONG: Regenerating entire Header.tsx to change one color
+❌ WRONG: Rewriting Hero.tsx to add one button
 
 NAVIGATION/HEADER INTELLIGENCE:
-- ALWAYS check App.jsx imports first
-- Navigation is usually INSIDE Header.jsx, not separate
-- If user says "nav", check Header.jsx FIRST
-- Only create Nav.jsx if no navigation exists anywhere
+- ALWAYS check App.tsx imports first
+- Navigation is usually INSIDE Header.tsx, not separate
+- If user says "nav", check Header.tsx FIRST
+- Only create Nav.tsx if no navigation exists anywhere
 - Logo, menu, hamburger = all typically in Header
 
 CRITICAL: When files are provided in the context:
@@ -1007,7 +1097,7 @@ CRITICAL: When files are provided in the context:
 MORPH FAST APPLY MODE (EDIT-ONLY):
 - Output edits as <edit> blocks, not full <file> blocks, for files that already exist.
 - Format for each edit:
-  <edit target_file="src/components/Header.jsx">
+  <edit target_file="src/components/Header.tsx">
     <instructions>Describe the minimal change, single sentence.</instructions>
     <update>Provide the SMALLEST code snippet necessary to perform the change.</update>
   </edit>
@@ -1017,8 +1107,21 @@ MORPH FAST APPLY MODE (EDIT-ONLY):
 `;
         }
 
+        // Multi-task detection: check if prompt contains multiple distinct tasks
+        const multiTaskIndicators = [
+          /^\d+[\.\)]\s+/m,           // numbered list: "1. do x\n2. do y"
+          /^[-*]\s+/m,                 // bullet list: "- do x\n- do y"
+          /\b(?:also|additionally|furthermore|moreover)\s+(?:add|create|fix|change|update|implement|build|make)\b/i,
+          /\b(?:and\s+then|then\s+)\s*(?:add|create|fix|change|update|implement|build|make)\b/i,
+          /(?:\b(?:add|create|fix|change|update|implement|build|make)\b\s+(?:a|an|the)\s+\w+){2,}/i,
+        ];
+        const isMultiTask = multiTaskIndicators.some(r => r.test(prompt));
+        const processedPrompt = isMultiTask
+          ? `[MULTI-TASK REQUEST DETECTED]\n${prompt}\n\nYou must detect the individual tasks, create a TODO list, and complete each one in order. Use the "--- Task N: ... ---" separator between tasks.`
+          : prompt;
+
         // Build full prompt with context
-        let fullPrompt = prompt;
+        let fullPrompt = processedPrompt;
         if (context) {
           const contextParts = [];
           
@@ -1179,9 +1282,9 @@ MORPH FAST APPLY MODE (EDIT-ONLY):
               contextParts.push('- Adding new component = 2 files MAX (new component + parent that imports it)');
               contextParts.push('- DO NOT exceed these limits unless absolutely necessary');
               contextParts.push('\nEXAMPLES OF CORRECT BEHAVIOR:');
-              contextParts.push('✅ "add a chart to the hero" → Edit ONLY Hero.jsx, ADD the chart, KEEP everything else');
-              contextParts.push('✅ "change header to black" → Edit ONLY Header.jsx, change ONLY the color');
-              contextParts.push('✅ "fix spacing in footer" → Edit ONLY Footer.jsx, adjust ONLY spacing');
+              contextParts.push('✅ "add a chart to the hero" → Edit ONLY Hero.tsx, ADD the chart, KEEP everything else');
+              contextParts.push('✅ "change header to black" → Edit ONLY Header.tsx, change ONLY the color');
+              contextParts.push('✅ "fix spacing in footer" → Edit ONLY Footer.tsx, adjust ONLY spacing');
               contextParts.push('\nEXAMPLES OF FAILURES:');
               contextParts.push('❌ "change header color" → You edit Header, Footer, and App "for consistency"');
               contextParts.push('❌ "add chart to hero" → You regenerate the entire Hero component');
@@ -1210,17 +1313,17 @@ MORPH FAST APPLY MODE (EDIT-ONLY):
           if (isEdit) {
             contextParts.push('\nEDIT MODE ACTIVE');
             contextParts.push('This is an incremental update to an existing application.');
-            contextParts.push('DO NOT regenerate App.jsx, index.css, or other core files unless explicitly requested.');
+            contextParts.push('DO NOT regenerate App.tsx, index.css, or other core files unless explicitly requested.');
             contextParts.push('ONLY create or modify the specific files needed for the user\'s request.');
             contextParts.push('\n⚠️ CRITICAL FILE OUTPUT FORMAT - VIOLATION = FAILURE:');
             contextParts.push('YOU MUST OUTPUT EVERY FILE IN THIS EXACT XML FORMAT:');
-            contextParts.push('<file path="src/components/ComponentName.jsx">');
+            contextParts.push('<file path="src/components/ComponentName.tsx">');
             contextParts.push('// Complete file content here');
             contextParts.push('</file>');
             contextParts.push('<file path="src/index.css">');
             contextParts.push('/* CSS content here */');
             contextParts.push('</file>');
-            contextParts.push('\n❌ NEVER OUTPUT: "Generated Files: index.css, App.jsx"');
+            contextParts.push('\n❌ NEVER OUTPUT: "Generated Files: index.css, App.tsx"');
             contextParts.push('❌ NEVER LIST FILE NAMES WITHOUT CONTENT');
             contextParts.push('✅ ALWAYS: One <file> tag per file with COMPLETE content');
             contextParts.push('✅ ALWAYS: Include EVERY file you modified');
@@ -1261,19 +1364,34 @@ MORPH FAST APPLY MODE (EDIT-ONLY):
             }
           }
           
+          // Add dependency map (component graph summary)
+          const manifest: FileManifest | undefined = global.sandboxState?.fileCache?.manifest;
+          if (manifest?.componentTree) {
+            const tree = manifest.componentTree;
+            const entries = Object.entries(tree);
+            contextParts.push('\n📊 CURRENT DEPENDENCY MAP (component graph):');
+            contextParts.push(`Total files in graph: ${entries.length}`);
+            for (const [name, entry] of entries.slice(0, 30)) {
+              const deps = entry.imports || [];
+              const dependents = entries.filter(([, e]) => e.imports?.includes(name)).length;
+              contextParts.push(`  ${name} → imports: [${deps.slice(0, 5).join(', ')}${deps.length > 5 ? ', ...' : ''}], used by: ${dependents} file(s)`);
+            }
+            contextParts.push('Use the dependency map above to understand how components relate. When editing, check for dependent files that may need updates.');
+          }
+          
           if (contextParts.length > 0) {
             if (morphFastApplyEnabled) {
               contextParts.push('\nOUTPUT FORMAT (REQUIRED IN MORPH MODE):');
-              contextParts.push('<edit target_file="src/components/Component.jsx">');
+              contextParts.push('<edit target_file="src/components/Component.tsx">');
               contextParts.push('<instructions>Minimal, precise instruction.</instructions>');
               contextParts.push('<update>// Smallest necessary snippet</update>');
               contextParts.push('</edit>');
               contextParts.push('\nIf you need to create a NEW file, then and only then output a full file:');
-              contextParts.push('<file path="src/components/NewComponent.jsx">');
+              contextParts.push('<file path="src/components/NewComponent.tsx">');
               contextParts.push('// Full file content when creating new files');
               contextParts.push('</file>');
             }
-            fullPrompt = `CONTEXT:\n${contextParts.join('\n')}\n\nUSER REQUEST:\n${prompt}`;
+            fullPrompt = `CONTEXT:\n${contextParts.join('\n')}\n\nUSER REQUEST:\n${processedPrompt}`;
           }
         }
         
@@ -1313,6 +1431,86 @@ MORPH FAST APPLY MODE (EDIT-ONLY):
         console.log(`[generate-ai-code-stream] Using provider: ${isAnthropic ? 'Anthropic' : isGoogle ? 'Google' : isOpenAI ? 'OpenAI' : 'Groq'}, model: ${actualModel}`);
         console.log(`[generate-ai-code-stream] AI Gateway enabled: ${isUsingAIGateway}`);
         console.log(`[generate-ai-code-stream] Model string: ${model}`);
+
+        // === MULTI-TASK DECOMPOSITION ===
+        // If the prompt contains multiple tasks, decompose into a task list
+        // and restructure the prompt so the AI executes them sequentially.
+        if (isMultiTask) {
+          try {
+            await sendProgress({ type: 'status', message: 'Analyzing request and creating task plan...' });
+            
+            const decomposeResult = await generateText({
+              model: modelProvider(actualModel),
+              messages: [
+                {
+                  role: 'system',
+                  content: 'You are a task decomposition assistant. Analyze the user request and identify each distinct task. Output each task on a separate line starting with "TASK:". Be specific but concise. If it is a single task, output only "SINGLE_TASK". Do NOT output anything else.'
+                },
+                { role: 'user', content: prompt }
+              ],
+              temperature: 0.1,
+            });
+            
+            const decomposeText = decomposeResult.text.trim();
+            if (decomposeText.includes('SINGLE_TASK')) {
+              console.log('[generate-ai-code-stream] Decomposition: single task detected');
+            } else {
+              const taskLines = decomposeText.split('\n')
+                .map(l => l.replace(/^TASK:\s*/i, '').trim())
+                .filter(Boolean);
+              
+              if (taskLines.length > 1) {
+                console.log(`[generate-ai-code-stream] Decomposed into ${taskLines.length} tasks:`, taskLines);
+                
+                await sendProgress({ 
+                  type: 'task-plan', 
+                  tasks: taskLines,
+                  count: taskLines.length
+                });
+                
+                const taskPlanText = taskLines.map((t, i) => `${i + 1}. ${t}`).join('\n');
+                fullPrompt = `TASK PLAN (execute in order):\n${taskPlanText}\n\n---\n\n${fullPrompt}\n\nCRITICAL: You MUST complete ALL tasks above in order. Start each task with "--- Task N: [name] ---" as a header. Complete one task fully before moving to the next.`;
+                
+                await sendProgress({ type: 'status', message: `Executing ${taskLines.length} tasks sequentially...` });
+              } else {
+                console.log('[generate-ai-code-stream] Decomposition: single task from parse');
+              }
+            }
+          } catch (decomposeError) {
+            console.error('[generate-ai-code-stream] Decomposition failed (non-fatal):', decomposeError);
+          }
+        }
+
+        // === PEXELS IMAGE/VIDEO INTEGRATION ===
+        // Search for relevant real images/videos based on user prompt
+        // and inject them into the prompt so the AI uses real media URLs
+        const pexelsKey = process.env.PEXELS_API_KEY;
+        if (pexelsKey) {
+          try {
+            const imageQueries = extractImageQueries(prompt);
+            if (imageQueries.length > 0) {
+              await sendProgress({ type: 'status', message: 'Fetching relevant images from Pexels...' });
+              
+              const allAssets: PexelsAsset[] = [];
+              for (const query of imageQueries.slice(0, 3)) {
+                const images = await searchImages(query, 3);
+                allAssets.push(...images);
+                if (imageQueries.length <= 2) {
+                  const videos = await searchVideos(query, 1);
+                  allAssets.push(...videos);
+                }
+              }
+              
+              if (allAssets.length > 0) {
+                const pexelsBlock = formatAssetsForPrompt(allAssets.slice(0, 10), 'REAL IMAGES/VIDEOS FROM PEXELS');
+                fullPrompt += `\n\n${pexelsBlock}`;
+                console.log(`[generate-ai-code-stream] Injected ${allAssets.length} Pexels assets into prompt`);
+              }
+            }
+          } catch (pexelsError) {
+            console.error('[generate-ai-code-stream] Pexels search failed (non-fatal):', pexelsError);
+          }
+        }
 
         // Make streaming API call with appropriate provider
         const streamOptions: any = {
@@ -1361,7 +1559,7 @@ REMEMBER: It's better to generate fewer COMPLETE files than many INCOMPLETE file
               content: fullPrompt + `
 
 CRITICAL: You MUST complete EVERY file you start. If you write:
-<file path="src/components/Hero.jsx">
+<file path="src/components/Hero.tsx">
 
 You MUST include the closing </file> tag and ALL the code in between.
 
@@ -1378,9 +1576,9 @@ It's better to have 3 complete files than 10 incomplete files.`
             }
           ],
           maxTokens: 8192, // Reduce to ensure completion
-          stopSequences: [] // Don't stop early
-          // Note: Neither Groq nor Anthropic models support tool/function calling in this context
-          // We use XML tags for package detection instead
+          stopSequences: [], // Don't stop early
+          tools: aiTools,
+          maxSteps: 5,
         };
         
         // Add temperature for non-reasoning models
@@ -1400,51 +1598,76 @@ It's better to have 3 complete files than 10 incomplete files.`
         let result;
         let retryCount = 0;
         const maxRetries = 2;
+        const TIMEOUT_MS = 30000; // 30s timeout per attempt
+        
+        await sendProgress({ type: 'info', message: 'Starting generation (may take a few seconds)...' });
         
         while (retryCount <= maxRetries) {
           try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
+            streamOptions.abortSignal = controller.signal;
+            
+            if (retryCount > 0) {
+              await sendProgress({
+                type: 'info',
+                message: `${retryCount === 1 ? 'First attempt timed out, trying faster model...' : 'Retrying with different model...'}`
+              });
+            }
+            
+            console.log(`[generate-ai-code-stream] Calling streamText (attempt ${retryCount + 1}) with ${actualModel}`);
             result = await streamText(streamOptions);
+            clearTimeout(timeoutId);
             break; // Success, exit retry loop
           } catch (streamError: any) {
-            console.error(`[generate-ai-code-stream] Error calling streamText (attempt ${retryCount + 1}/${maxRetries + 1}):`, streamError);
+            console.error(`[generate-ai-code-stream] Error (attempt ${retryCount + 1}):`, streamError.message || streamError);
             
-            // Check if this is a Groq service unavailable error
-            const isGroqServiceError = isKimiGroq && streamError.message?.includes('Service unavailable');
-            const isRetryableError = streamError.message?.includes('Service unavailable') || 
-                                    streamError.message?.includes('rate limit') ||
-                                    streamError.message?.includes('timeout');
+            const isTimeout = streamError.name === 'AbortError' || 
+                             streamError.message?.includes('abort') ||
+                             streamError.message?.includes('timeout') ||
+                             streamError.message?.includes('timed out');
+            const isServiceError = streamError.message?.includes('503') ||
+                                  streamError.message?.includes('500') ||
+                                  streamError.message?.includes('Service unavailable') ||
+                                  streamError.message?.includes('Unavailable') ||
+                                  streamError.message?.includes('Internal') ||
+                                  streamError.message?.includes('rate limit');
             
-            if (retryCount < maxRetries && isRetryableError) {
+            const shouldRetry = retryCount < maxRetries && (isTimeout || isServiceError);
+            
+            if (shouldRetry) {
               retryCount++;
-              console.log(`[generate-ai-code-stream] Retrying in ${retryCount * 2} seconds...`);
               
-              // Send progress update about retry
-              await sendProgress({ 
-                type: 'info', 
-                message: `Service temporarily unavailable, retrying (attempt ${retryCount + 1}/${maxRetries + 1})...` 
+              // Fallback to a faster/reliable model
+              await sendProgress({
+                type: 'info',
+                message: `Switching to faster model (${retryCount === 1 ? 'gemini-2.0-flash' : 'gpt-4o-mini'})...`
               });
               
-              // Wait before retry with exponential backoff
-              await new Promise(resolve => setTimeout(resolve, retryCount * 2000));
-              
-              // If Groq fails, try switching to a fallback model
-              if (isGroqServiceError && retryCount === maxRetries) {
-                console.log('[generate-ai-code-stream] Groq service unavailable, falling back to GPT-4');
-                streamOptions.model = openai('gpt-4-turbo');
-                actualModel = 'gpt-4-turbo';
+              if (retryCount === 1) {
+                console.log('[generate-ai-code-stream] Falling back to gemini-2.0-flash');
+                streamOptions.model = googleGenerativeAI('gemini-2.0-flash');
+                actualModel = 'gemini-2.0-flash';
+              } else {
+                console.log('[generate-ai-code-stream] Falling back to gpt-4o-mini');
+                streamOptions.model = openai('gpt-4o-mini');
+                actualModel = 'gpt-4o-mini';
               }
+              
+              // Ensure clean state for next attempt (remove old abort signal)
+              delete streamOptions.abortSignal;
+              await new Promise(resolve => setTimeout(resolve, 1000));
             } else {
-              // Final error, send to user
+              // Final error
               await sendProgress({ 
                 type: 'error', 
-                message: `Failed to initialize ${isGoogle ? 'Gemini' : isAnthropic ? 'Claude' : isOpenAI ? 'GPT-5' : isKimiGroq ? 'Kimi (Groq)' : 'Groq'} streaming: ${streamError.message}` 
+                message: `Generation failed after ${retryCount + 1} attempts: ${streamError.message || 'Unknown error'}` 
               });
               
-              // If this is a Google model error, provide helpful info
               if (isGoogle) {
                 await sendProgress({ 
                   type: 'info', 
-                  message: 'Tip: Make sure your GEMINI_API_KEY is set correctly and has proper permissions.' 
+                  message: 'Tip: Make sure your GEMINI_API_KEY is set correctly.' 
                 });
               }
               
@@ -1555,17 +1778,17 @@ It's better to have 3 complete files than 10 incomplete files.`
             // Send component progress update
             if (currentFilePath.includes('components/')) {
               componentCount++;
-              const componentName = currentFilePath.split('/').pop()?.replace('.jsx', '') || 'Component';
+              const componentName = currentFilePath.split('/').pop()?.replace(/\.(jsx|tsx)$/, '') || 'Component';
               await sendProgress({ 
                 type: 'component', 
                 name: componentName,
                 path: currentFilePath,
                 index: componentCount
               });
-            } else if (currentFilePath.includes('App.jsx')) {
+            } else if (currentFilePath.includes('App.tsx')) {
               await sendProgress({ 
                 type: 'app', 
-                message: 'Generated main App.jsx',
+                message: 'Generated main App.tsx',
                 path: currentFilePath
               });
             }
@@ -1664,22 +1887,82 @@ It's better to have 3 complete files than 10 incomplete files.`
           
           // Send progress for each file (reusing componentCount from streaming)
           if (filePath.includes('components/')) {
-            const componentName = filePath.split('/').pop()?.replace('.jsx', '') || 'Component';
+            const componentName = filePath.split('/').pop()?.replace(/\.(jsx|tsx)$/, '') || 'Component';
             await sendProgress({ 
               type: 'component', 
               name: componentName,
               path: filePath,
               index: componentCount
             });
-          } else if (filePath.includes('App.jsx')) {
+          } else if (filePath.includes('App.tsx')) {
             await sendProgress({ 
               type: 'app', 
-              message: 'Generated main App.jsx',
+              message: 'Generated main App.tsx',
               path: filePath
             });
           }
         }
         
+        // Build file manifest for graph data
+        if (files.length > 0) {
+          try {
+            const fileManifest: FileManifest = {
+              files: {},
+              routes: [],
+              componentTree: {},
+              entryPoint: '',
+              styleFiles: [],
+              timestamp: Date.now(),
+            };
+
+            for (const { path: filePath, content } of files) {
+              const relativePath = filePath.replace(/^src\//, '');
+              const fullPath = `/${filePath}`;
+
+              const fileInfo: FileInfo = {
+                content,
+                type: 'utility',
+                path: fullPath,
+                relativePath,
+                lastModified: Date.now(),
+              };
+
+              if (relativePath.match(/\.(jsx?|tsx?)$/)) {
+                const parseResult = parseJavaScriptFile(content, fullPath);
+                Object.assign(fileInfo, parseResult);
+
+                if (relativePath.match(/^(src\/)?App\.(jsx?|tsx?)$/)) {
+                  fileManifest.entryPoint = fileManifest.entryPoint || fullPath;
+                }
+              }
+
+              if (relativePath.endsWith('.css')) {
+                fileManifest.styleFiles.push(fullPath);
+                fileInfo.type = 'style';
+              }
+
+              fileManifest.files[fullPath] = fileInfo;
+            }
+
+            fileManifest.componentTree = buildComponentTree(fileManifest.files);
+
+            if (!global.sandboxState) {
+              global.sandboxState = { fileCache: null, sandbox: null, sandboxData: null };
+            }
+            if (!global.sandboxState.fileCache) {
+              global.sandboxState.fileCache = {
+                files: {},
+                lastSync: Date.now(),
+                sandboxId: context?.sandboxId || 'unknown',
+              };
+            }
+            global.sandboxState.fileCache.manifest = fileManifest;
+            console.log(`[generate-ai-code-stream] Built file manifest with ${Object.keys(fileManifest.files).length} files, ${Object.keys(fileManifest.componentTree).length} components`);
+          } catch (manifestError) {
+            console.error('[generate-ai-code-stream] Failed to build file manifest:', manifestError);
+          }
+        }
+
         // Extract explanation
         const explanationMatch = generatedCode.match(/<explanation>([\s\S]*?)<\/explanation>/);
         const explanation = explanationMatch ? explanationMatch[1].trim() : 'Code generated successfully!';

@@ -171,8 +171,35 @@ export default defineConfig({
             "vite": "^4.3.9",
             "tailwindcss": "^3.3.0",
             "postcss": "^8.4.31",
-            "autoprefixer": "^10.4.16"
+            "autoprefixer": "^10.4.16",
+            "typescript": "^5.3.0",
+            "@types/react": "^18.2.0",
+            "@types/react-dom": "^18.2.0"
           }
+        }, null, 2))
+      },
+      {
+        path: 'tsconfig.json',
+        content: Buffer.from(JSON.stringify({
+          compilerOptions: {
+            target: "ES2020",
+            useDefineForClassFields: true,
+            lib: ["ES2020", "DOM", "DOM.Iterable"],
+            module: "ESNext",
+            skipLibCheck: true,
+            moduleResolution: "bundler",
+            allowImportingTsExtensions: true,
+            isolatedModules: true,
+            moduleDetection: "force",
+            noEmit: true,
+            jsx: "react-jsx",
+            strict: true,
+            noUnusedLocals: false,
+            noUnusedParameters: false,
+            noFallthroughCasesInSwitch: true,
+            forceConsistentCasingInFileNames: true
+          },
+          include: ["src"]
         }, null, 2))
       },
       {
@@ -213,25 +240,25 @@ export default {
   </head>
   <body>
     <div id="root"></div>
-    <script type="module" src="/src/main.jsx"></script>
+    <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>`)
       },
       {
-        path: 'src/main.jsx',
+        path: 'src/main.tsx',
         content: Buffer.from(`import React from 'react'
 import ReactDOM from 'react-dom/client'
-import App from './App.jsx'
+import App from './App'
 import './index.css'
 
-ReactDOM.createRoot(document.getElementById('root')).render(
+ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <App />
   </React.StrictMode>,
 )`)
       },
       {
-        path: 'src/App.jsx',
+        path: 'src/App.tsx',
         content: Buffer.from(`function App() {
   return (
     <div className="min-h-screen bg-gray-900 text-white flex items-center justify-center p-4">
@@ -337,11 +364,12 @@ body {
     };
     
     // Track initial files
-    global.existingFiles.add('src/App.jsx');
-    global.existingFiles.add('src/main.jsx');
+    global.existingFiles.add('src/App.tsx');
+    global.existingFiles.add('src/main.tsx');
     global.existingFiles.add('src/index.css');
     global.existingFiles.add('index.html');
     global.existingFiles.add('package.json');
+    global.existingFiles.add('tsconfig.json');
     global.existingFiles.add('vite.config.js');
     global.existingFiles.add('tailwind.config.js');
     global.existingFiles.add('postcss.config.js');
