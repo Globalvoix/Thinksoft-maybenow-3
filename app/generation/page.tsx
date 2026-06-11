@@ -2759,6 +2759,9 @@ Tip: I automatically detect and install npm packages from your code imports (lik
       setChatMessages([]);
     }
 
+    // Add user prompt to chat first
+    addChatMessage(userDescription, 'user');
+
     updateGenerationCard({
       status: 'thinking',
       title: 'Building your web app',

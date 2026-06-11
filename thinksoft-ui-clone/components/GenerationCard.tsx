@@ -30,13 +30,13 @@ export interface GenerationCardProps {
   isBookmarked?: boolean;
 }
 
-function ShimmerText({ text }: { text: string }) {
+function TextShimmer({ text, duration = 1.2 }: { text: string; duration?: number }) {
   return (
-    <span className="relative inline-block overflow-hidden text-white/90">
-      <span className="absolute inset-0 animate-shimmer">
-        <span className="absolute inset-0 bg-gradient-to-r from-transparent via-white/80 to-transparent w-[200%] animate-shimmer-slide" />
-      </span>
-      <span className="relative">{text}</span>
+    <span
+      className="inline-block bg-gradient-to-r from-white/30 via-white/90 to-white/30 bg-[length:200%_100%] bg-clip-text text-transparent animate-shimmer"
+      style={{ animationDuration: `${duration}s` }}
+    >
+      {text}
     </span>
   );
 }
@@ -62,7 +62,7 @@ function StatusLabel({ status }: { status: GenerationCardStatus }) {
     <span className="flex items-center gap-1.5 text-[13px] font-medium text-[var(--text-primary)]">
       {info.icon}
       {isAnimated ? (
-        <ShimmerText text={info.text} />
+        <TextShimmer text={info.text} />
       ) : (
         <span>{info.text}</span>
       )}
