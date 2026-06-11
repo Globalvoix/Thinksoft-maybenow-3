@@ -30,12 +30,13 @@ export interface GenerationCardProps {
   isBookmarked?: boolean;
 }
 
-function AnimatedDots() {
+function ShimmerText({ text }: { text: string }) {
   return (
-    <span className="flex gap-0.5 ml-1">
-      <span className="w-1 h-1 rounded-full bg-current animate-bounce" style={{ animationDelay: '0ms' }} />
-      <span className="w-1 h-1 rounded-full bg-current animate-bounce" style={{ animationDelay: '150ms' }} />
-      <span className="w-1 h-1 rounded-full bg-current animate-bounce" style={{ animationDelay: '300ms' }} />
+    <span className="relative inline-block overflow-hidden text-white/90">
+      <span className="absolute inset-0 animate-shimmer">
+        <span className="absolute inset-0 bg-gradient-to-r from-transparent via-white/80 to-transparent w-[200%] animate-shimmer-slide" />
+      </span>
+      <span className="relative">{text}</span>
     </span>
   );
 }
@@ -60,10 +61,11 @@ function StatusLabel({ status }: { status: GenerationCardStatus }) {
   return (
     <span className="flex items-center gap-1.5 text-[13px] font-medium text-[var(--text-primary)]">
       {info.icon}
-      <span className="flex items-center">
-        {info.text}
-        {isAnimated && <AnimatedDots />}
-      </span>
+      {isAnimated ? (
+        <ShimmerText text={info.text} />
+      ) : (
+        <span>{info.text}</span>
+      )}
     </span>
   );
 }

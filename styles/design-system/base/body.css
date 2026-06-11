@@ -130,3 +130,17 @@ html {
     font-size: 17px;
   }
 }
+
+/* Text shimmer animation for generation cards */
+@keyframes shimmer-slide {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+.animate-shimmer-slide {
+  animation: shimmer-slide 2s infinite linear;
+}
