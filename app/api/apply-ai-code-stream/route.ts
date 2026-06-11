@@ -357,6 +357,13 @@ export async function POST(request: NextRequest) {
       provider = global.activeSandboxProvider;
     }
 
+    // Fall back to raw Vercel Sandbox from create-ai-sandbox route if available
+    if (!provider && (global as any).activeSandbox?.writeFile) {
+      console.log('[apply-ai-code-stream] Using global.activeSandbox as provider');
+      provider = (global as any).activeSandbox;
+      global.activeSandboxProvider = provider;
+    }
+
     // If we have a sandboxId but no provider, try to get or create one
     if (!provider && sandboxId) {
       console.log(`[apply-ai-code-stream] No provider found for sandbox ${sandboxId}, attempting to get or create...`);

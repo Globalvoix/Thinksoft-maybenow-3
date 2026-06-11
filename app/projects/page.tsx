@@ -26,6 +26,7 @@ import {
 import { SearchModal } from '@/thinksoft-ui-clone/components/SearchModal';
 import { ConnectorsModal } from '@/thinksoft-ui-clone/components/ConnectorsModal';
 import { useRouter } from 'next/navigation';
+import { useUser } from '@clerk/nextjs';
 import '@/thinksoft-ui-clone/home-overrides.css';
 
 const logo = '/thinksoft-logo.png';
@@ -88,103 +89,85 @@ const ProjectItem = ({ label }: { label: string }) => (
   </button>
 );
 
-const initialActiveProjects = [
-  {
-    id: 1,
-    title: "Stream Box",
-    edited: "Edited 43 minutes ago",
-    createdAt: "18 hours ago",
-    creator: "Think",
-    image: "https://images.unsplash.com/photo-1616530940355-351fabd9524b?q=80&w=800&auto=format&fit=crop",
-    avatar: "T",
-    avatarColor: "bg-[#659b4a]"
-  }
-];
+interface ProjectData {
+  id: string;
+  title: string;
+  creator_name: string;
+  avatar: string;
+  prompt: string;
+  sandbox_id: string;
+  created_at: string;
+  updated_at: string;
+}
 
-const initialInactiveProjects = [
-  {
-    id: 2,
-    title: "ClueMaster Game",
-    edited: "Edited 15 Jan 2026",
-    createdAt: "4 Jan 2026",
-    creator: "Think",
-    image: "https://images.unsplash.com/photo-1551288049-bebda4e38f71?q=80&w=800&auto=format&fit=crop",
-    avatar: "T",
-    avatarColor: "bg-[#659b4a]"
-  },
-  {
-    id: 3,
-    title: "Your Next Marketplace",
-    edited: "Edited 8 Jan 2026",
-    createdAt: "29 Dec 2025",
-    creator: "Think",
-    image: "https://images.unsplash.com/photo-1607082348824-0a96f2a4b9da?q=80&w=800&auto=format&fit=crop",
-    avatar: "T",
-    avatarColor: "bg-[#659b4a]"
-  },
-  {
-    id: 4,
-    title: "Dynamic Page Clone",
-    edited: "Edited 8 Jan 2026",
-    createdAt: "7 Jan 2026",
-    creator: "Think",
-    image: "https://images.unsplash.com/photo-1498050108023-c5249f4df085?q=80&w=800&auto=format&fit=crop",
-    avatar: "T",
-    avatarColor: "bg-[#659b4a]"
-  },
-  {
-    id: 5,
-    title: "Your Personal Search Engine",
-    edited: "Edited 4 Jan 2026",
-    createdAt: "4 Jan 2026",
-    creator: "Think",
-    image: "https://images.unsplash.com/photo-1557683316-973673baf926?q=80&w=800&auto=format&fit=crop",
-    avatar: "T",
-    avatarColor: "bg-[#659b4a]"
-  },
-  {
-    id: 6,
-    title: "Your Next Binge",
-    edited: "Edited 4 Jan 2026",
-    createdAt: "4 Jan 2026",
-    creator: "Think",
-    image: "https://images.unsplash.com/photo-1574375927938-d5a98e8ffe85?q=80&w=800&auto=format&fit=crop",
-    avatar: "T",
-    avatarColor: "bg-[#659b4a]"
-  },
-  {
-    id: 7,
-    title: "N Intro Stream",
-    edited: "Edited 1 Jan 2026",
-    createdAt: "1 Jan 2026",
-    creator: "Think",
-    image: "https://images.unsplash.com/photo-1611162617474-5b21e879e113?q=80&w=800&auto=format&fit=crop",
-    avatar: "T",
-    avatarColor: "bg-[#659b4a]"
-  },
-  {
-    id: 8,
-    title: "Project Make It",
-    edited: "Edited 24 Nov 2025",
-    createdAt: "24 Nov 2025",
-    creator: "Think",
-    image: "https://images.unsplash.com/photo-1507238691740-187a5b1d37b8?q=80&w=800&auto=format&fit=crop",
-    avatar: "T",
-    avatarColor: "bg-[#659b4a]"
-  }
-];
+function formatTimeAgo(dateStr: string): string {
+  const diff = Date.now() - new Date(dateStr).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return 'Just now';
+  if (mins < 60) return `Edited ${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `Edited ${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 14) return `Edited ${days}d ago`;
+  return new Date(dateStr).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+function formatCreatedAt(dateStr: string): string {
+  const d = new Date(dateStr);
+  const diff = Date.now() - d.getTime();
+  const days = Math.floor(diff / 86400000);
+  if (days < 1) return 'Today';
+  if (days === 1) return 'Yesterday';
+  if (days < 30) return `${days} days ago`;
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
 
 export default function ProjectsPage() {
   const router = useRouter();
+  const { isLoaded, isSignedIn, user } = useUser();
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isConnectorsOpen, setIsConnectorsOpen] = useState(false);
 
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [searchQuery, setSearchQuery] = useState('');
-  const [starredProjects, setStarredProjects] = useState<number[]>([]);
-  const [activeProjects, setActiveProjects] = useState(initialActiveProjects);
-  const [inactiveProjects, setInactiveProjects] = useState(initialInactiveProjects);
+  const [starredProjects, setStarredProjects] = useState<string[]>([]);
+  const [projects, setProjects] = useState<ProjectData[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!isLoaded || !isSignedIn) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/projects');
+        if (res.ok && !cancelled) {
+          const data = await res.json();
+          const seen = new Set<string>();
+          setProjects(data.filter((p: any) => {
+            if (seen.has(p.id)) return false;
+            seen.add(p.id);
+            return true;
+          }));
+        }
+      } catch (e) {
+        console.error('[projects] Failed to load', e);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [isLoaded, isSignedIn]);
+
+  const activeProjects = projects.filter(p => {
+    const diff = Date.now() - new Date(p.updated_at).getTime();
+    return diff < 14 * 86400000;
+  });
+
+  const inactiveProjects = projects.filter(p => {
+    const diff = Date.now() - new Date(p.updated_at).getTime();
+    return diff >= 14 * 86400000;
+  });
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -197,15 +180,23 @@ export default function ProjectsPage() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
-  const toggleStar = (id: number) => {
+  const toggleStar = (id: string) => {
     setStarredProjects(prev =>
       prev.includes(id) ? prev.filter(pId => pId !== id) : [...prev, id]
     );
   };
 
-  const handleRename = (id: number, newTitle: string) => {
-    setActiveProjects(prev => prev.map(p => p.id === id ? { ...p, title: newTitle } : p));
-    setInactiveProjects(prev => prev.map(p => p.id === id ? { ...p, title: newTitle } : p));
+  const handleRename = async (id: string, newTitle: string) => {
+    setProjects(prev => prev.map(p => p.id === id ? { ...p, title: newTitle } : p));
+    try {
+      await fetch(`/api/projects/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: newTitle }),
+      });
+    } catch (e) {
+      console.error('[projects] Failed to rename', e);
+    }
   };
 
   const filteredActiveProjects = activeProjects.filter(project =>
@@ -481,14 +472,36 @@ export default function ProjectsPage() {
             </div>
           </div>
 
-          {viewMode === 'grid' ? (
+          {loading ? (
+            <div className="flex items-center justify-center py-20">
+              <div className="flex flex-col items-center gap-4">
+                <div className="w-8 h-8 border-2 border-white/20 border-t-white rounded-full animate-spin" />
+                <span className="text-[#a0a0a0] text-[14px]">Loading projects...</span>
+              </div>
+            </div>
+          ) : projects.length === 0 && !loading ? (
+            <div className="flex flex-col items-center justify-center py-20">
+              <div className="w-16 h-16 rounded-xl bg-neutral-800/50 flex items-center justify-center mb-4">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="text-[#666]">
+                  <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+                  <line x1="3" y1="9" x2="21" y2="9" />
+                  <line x1="9" y1="21" x2="9" y2="9" />
+                </svg>
+              </div>
+              <h3 className="text-white text-[16px] font-medium mb-1">No projects yet</h3>
+              <p className="text-[#a0a0a0] text-[13px] mb-6">Start by creating your first project from the home page.</p>
+              <button onClick={() => router.push('/')} className="px-5 py-2.5 bg-white text-black rounded-xl font-semibold text-[13px] hover:bg-neutral-200 transition-colors">
+                Create your first project
+              </button>
+            </div>
+          ) : viewMode === 'grid' ? (
             <>
               {/* Active Section */}
               <div className="mb-12">
                 <h2 className="text-[13px] font-semibold text-[#a0a0a0] mb-4 tracking-wide">Active in last 14 days</h2>
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-x-8 gap-y-10">
                   {/* Create New */}
-                  <div className="group cursor-pointer flex flex-col">
+                  <div onClick={() => router.push('/')} className="group cursor-pointer flex flex-col">
                     <div className="aspect-video bg-transparent border-2 border-dashed border-white/20 rounded-xl flex items-center justify-center group-hover:border-white/40 transition-colors mb-3">
                       <Plus className="w-6 h-6 text-[#666] group-hover:text-[#888] transition-colors" />
                     </div>
@@ -498,10 +511,16 @@ export default function ProjectsPage() {
                   {filteredActiveProjects.map(project => (
                     <ProjectCard
                       key={project.id}
-                      {...project}
+                      id={project.id}
+                      title={project.title}
+                      edited={formatTimeAgo(project.updated_at)}
+                      image={`https://ui-avatars.com/api/?name=${encodeURIComponent(project.title)}&background=333&color=fff&size=400`}
+                      avatar={project.creator_name?.charAt(0)?.toUpperCase() || 'Y'}
+                      avatarColor="bg-[#659b4a]"
                       isStarred={starredProjects.includes(project.id)}
                       onToggleStar={toggleStar}
                       onRename={handleRename}
+                      onClick={() => router.push(`/generation?projectId=${project.id}`)}
                     />
                   ))}
                 </div>
@@ -515,10 +534,16 @@ export default function ProjectsPage() {
                     {filteredInactiveProjects.map(project => (
                       <ProjectCard
                         key={project.id}
-                        {...project}
+                        id={project.id}
+                        title={project.title}
+                        edited={formatTimeAgo(project.updated_at)}
+                        image={`https://ui-avatars.com/api/?name=${encodeURIComponent(project.title)}&background=333&color=fff&size=400`}
+                        avatar={project.creator_name?.charAt(0)?.toUpperCase() || 'Y'}
+                        avatarColor="bg-[#659b4a]"
                         isStarred={starredProjects.includes(project.id)}
                         onToggleStar={toggleStar}
                         onRename={handleRename}
+                        onClick={() => router.push(`/generation?projectId=${project.id}`)}
                       />
                     ))}
                   </div>
@@ -543,10 +568,18 @@ export default function ProjectsPage() {
                   {filteredActiveProjects.map(project => (
                     <ProjectListItem
                       key={project.id}
-                      {...project}
+                      id={project.id}
+                      title={project.title}
+                      edited={formatTimeAgo(project.updated_at)}
+                      createdAt={formatCreatedAt(project.created_at)}
+                      creator={project.creator_name || 'You'}
+                      image={`https://ui-avatars.com/api/?name=${encodeURIComponent(project.title)}&background=333&color=fff&size=400`}
+                      avatar={project.creator_name?.charAt(0)?.toUpperCase() || 'Y'}
+                      avatarColor="bg-[#659b4a]"
                       isStarred={starredProjects.includes(project.id)}
                       onToggleStar={toggleStar}
                       onRename={handleRename}
+                      onClick={() => router.push(`/generation?projectId=${project.id}`)}
                     />
                   ))}
                 </div>
@@ -560,10 +593,18 @@ export default function ProjectsPage() {
                     {filteredInactiveProjects.map(project => (
                       <ProjectListItem
                         key={project.id}
-                        {...project}
+                        id={project.id}
+                        title={project.title}
+                        edited={formatTimeAgo(project.updated_at)}
+                        createdAt={formatCreatedAt(project.created_at)}
+                        creator={project.creator_name || 'You'}
+                        image={`https://ui-avatars.com/api/?name=${encodeURIComponent(project.title)}&background=333&color=fff&size=400`}
+                        avatar={project.creator_name?.charAt(0)?.toUpperCase() || 'Y'}
+                        avatarColor="bg-[#659b4a]"
                         isStarred={starredProjects.includes(project.id)}
                         onToggleStar={toggleStar}
                         onRename={handleRename}
+                        onClick={() => router.push(`/generation?projectId=${project.id}`)}
                       />
                     ))}
                   </div>
@@ -580,8 +621,8 @@ export default function ProjectsPage() {
   );
 }
 
-const ProjectListItem = ({ id, title, edited, createdAt, creator, image, avatar, avatarColor, isStarred, onToggleStar }: any) => (
-  <div className="group grid grid-cols-[116px_minmax(300px,2.5fr)_minmax(200px,1fr)_minmax(150px,1fr)_40px] gap-4 items-center px-3 py-1.5 hover:bg-white/5 transition-colors rounded-xl cursor-pointer">
+const ProjectListItem = ({ id, title, edited, createdAt, creator, image, avatar, avatarColor, isStarred, onToggleStar, onClick }: any) => (
+  <div onClick={onClick} className="group grid grid-cols-[116px_minmax(300px,2.5fr)_minmax(200px,1fr)_minmax(150px,1fr)_40px] gap-4 items-center px-3 py-1.5 hover:bg-white/5 transition-colors rounded-xl cursor-pointer">
     <div className="w-[116px] h-[65px] bg-[#141414] rounded-lg overflow-hidden shrink-0 border border-white/10">
       <img src={image} alt={title} className="w-full h-full object-cover" />
     </div>
@@ -856,7 +897,7 @@ const CreatorsDropdown = () => {
   );
 };
 
-const ProjectCard = ({ id, title, edited, image, avatar, avatarColor, isStarred, onToggleStar, onRename }: any) => {
+const ProjectCard = ({ id, title, edited, image, avatar, avatarColor, isStarred, onToggleStar, onRename, onClick }: any) => {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isRenaming, setIsRenaming] = useState(false);
   const [editTitle, setEditTitle] = useState(title);
@@ -899,7 +940,7 @@ const ProjectCard = ({ id, title, edited, image, avatar, avatarColor, isStarred,
   };
 
   return (
-    <div className="group cursor-pointer flex flex-col relative">
+    <div onClick={onClick} className="group cursor-pointer flex flex-col relative">
       <div className="aspect-video bg-transparent rounded-xl overflow-hidden mb-3 relative border border-white/20">
         <img src={image} alt={title} className="w-full h-full object-cover" />
         <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors" />

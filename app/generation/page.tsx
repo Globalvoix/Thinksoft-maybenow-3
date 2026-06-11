@@ -73,6 +73,8 @@ function AISandboxPage() {
   const [aiEnabled] = useState(true);
   const searchParams = useSearchParams();
   const router = useRouter();
+  const [projectId, setProjectId] = useState<string | null>(searchParams.get('projectId'));
+  const savedMessageIds = useRef<Set<string>>(new Set());
   const [aiModel, setAiModel] = useState(() => {
     const modelParam = searchParams.get('model');
     return appConfig.ai.availableModels.includes(modelParam || '') ? modelParam! : appConfig.ai.defaultModel;
@@ -105,6 +107,8 @@ function AISandboxPage() {
   const [hasInitialSubmission, setHasInitialSubmission] = useState<boolean>(false);
   const [fileStructure, setFileStructure] = useState<string>('');
   const [streamingAiContent, setStreamingAiContent] = useState('');
+  const projectCreationRef = useRef(false);
+  const pendingFilesRef = useRef<Array<{path: string, content: string}>>([]);
   const [selectedElement, setSelectedElement] = useState<{ tag: string; id: string; classes: string; text: string; selector: string } | null>(null);
   
   const [conversationContext, setConversationContext] = useState<{
@@ -198,6 +202,32 @@ function AISandboxPage() {
         setShowHomeScreen(false);
         setHomeScreenFading(false);
         
+        // Create project if we don't have one yet (e.g. user signed in via modal)
+        if (!projectId && !projectCreationRef.current) {
+          projectCreationRef.current = true;
+          try {
+            const res = await fetch('/api/projects', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                title: storedPrompt.slice(0, 60),
+                creator_name: 'You',
+                avatar: '',
+                prompt: storedPrompt,
+              }),
+            });
+            if (res.ok) {
+              const project = await res.json();
+              setProjectId(project.id);
+              const url = new URL(window.location.href);
+              url.searchParams.set('projectId', project.id);
+              window.history.replaceState(null, '', url.toString());
+            }
+          } catch (e) {
+            console.error('[generation] Failed to create project', e);
+          }
+        }
+        
         // Set flag to auto-trigger generation after component updates
         setShouldAutoGenerate(true);
         
@@ -222,33 +252,9 @@ function AISandboxPage() {
       
       if (!isMounted) return;
 
-      // Check if sandbox ID is in URL
-      const sandboxIdParam = searchParams.get('sandbox');
-      
-      setLoading(true);
-      try {
-        if (sandboxIdParam) {
-          console.log('[home] Attempting to restore sandbox:', sandboxIdParam);
-          // For now, just create a new sandbox - you could enhance this to actually restore
-          // the specific sandbox if your backend supports it
-          sandboxCreated = true;
-          await createSandbox(true);
-        } else {
-          console.log('[home] No sandbox in URL, creating new sandbox automatically...');
-          sandboxCreated = true;
-          await createSandbox(true);
-        }
-        
-        // autoStart is already set in sessionStorage from the home page
-      } catch (error) {
-        console.error('[ai-sandbox] Failed to create or restore sandbox:', error);
-        if (isMounted) {
-          addChatMessage('Failed to create or restore sandbox.', 'error');
-        }
-      } finally {
-        if (isMounted) {
-          setLoading(false);
-        }
+      // Sandbox creation is handled by startGeneration() when auto-start fires
+      if (isMounted) {
+        setLoading(false);
       }
     };
     
@@ -304,12 +310,12 @@ function AISandboxPage() {
   useEffect(() => {
     const autoStart = sessionStorage.getItem('autoStart');
     if (autoStart === 'true' && !showHomeScreen && homeUrlInput) {
-      sessionStorage.removeItem('autoStart');
-      // Small delay to ensure everything is ready
-      setTimeout(() => {
+      const timer = setTimeout(() => {
+        sessionStorage.removeItem('autoStart');
         console.log('[generation] Auto-starting generation for:', homeUrlInput);
         startGeneration();
       }, 1000);
+      return () => clearTimeout(timer);
     }
   }, [showHomeScreen, homeUrlInput]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -328,6 +334,65 @@ function AISandboxPage() {
       chatMessagesRef.current.scrollTop = chatMessagesRef.current.scrollHeight;
     }
   }, [chatMessages]);
+
+  // Load existing project from database
+  useEffect(() => {
+    if (!projectId) return;
+    (async () => {
+      try {
+        const [projectRes, messagesRes, filesRes] = await Promise.all([
+          fetch(`/api/projects/${projectId}`),
+          fetch(`/api/projects/${projectId}/messages`),
+          fetch(`/api/projects/${projectId}/files`),
+        ]);
+        if (projectRes.ok) {
+          const project = await projectRes.json();
+          if (project.prompt) {
+            setHomeUrlInput(project.prompt);
+            sessionStorage.setItem('userPrompt', project.prompt);
+          }
+          setShowHomeScreen(false);
+          setHomeScreenFading(false);
+        }
+        if (messagesRes.ok) {
+          const messages = await messagesRes.json();
+          if (messages.length > 0) {
+            setChatMessages(messages.map((m: any) => ({
+              content: m.content,
+              type: m.role === 'user' ? 'user' : m.role === 'assistant' ? 'ai' : 'system',
+              timestamp: new Date(m.created_at),
+            })));
+            messages.forEach((m: any) => savedMessageIds.current.add(m.id));
+          }
+        }
+        if (filesRes.ok) {
+          const files = await filesRes.json();
+          if (files.length > 0) {
+            setGenerationProgress(prev => ({
+              ...prev,
+              files: files.map((f: any) => {
+                const ext = (f.file_path || '').split('.').pop() || '';
+                const type = ext === 'tsx' || ext === 'ts' || ext === 'jsx' || ext === 'js' ? 'javascript' :
+                             ext === 'css' ? 'css' :
+                             ext === 'json' ? 'json' :
+                             ext === 'html' ? 'html' : 'text';
+                return {
+                  path: f.file_path,
+                  content: f.content,
+                  type,
+                  completed: true,
+                  edited: false
+                };
+              }),
+            }));
+            setSelectedFile(files[0].file_path);
+          }
+        }
+      } catch (e) {
+        console.error('[generation] Failed to load project', e);
+      }
+    })();
+  }, [projectId]);
 
   // Auto-trigger generation when flag is set (from home page navigation)
   useEffect(() => {
@@ -354,6 +419,16 @@ function AISandboxPage() {
     setResponseArea(prev => [...prev, `[${type}] ${message}`]);
   };
 
+  const saveMessageToDb = useRef<(content: string, role: string) => void>(() => {});
+  saveMessageToDb.current = (content: string, role: string) => {
+    if (!projectId) return;
+    fetch(`/api/projects/${projectId}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ role, content }),
+    }).catch(e => console.error('[generation] Failed to save message', e));
+  };
+
   const addChatMessage = (content: string, type: ChatMessage['type'], metadata?: ChatMessage['metadata']) => {
     setChatMessages(prev => {
       // Skip duplicate consecutive system messages
@@ -365,6 +440,9 @@ function AISandboxPage() {
       }
       return [...prev, { content, type, timestamp: new Date(), metadata }];
     });
+    if (type === 'user') saveMessageToDb.current(content, 'user');
+    else if (type === 'ai') saveMessageToDb.current(content, 'assistant');
+    else if (type === 'system') saveMessageToDb.current(content, 'system');
   };
   
   const checkAndInstallPackages = async () => {
@@ -1907,6 +1985,7 @@ Tip: I automatically detect and install npm packages from your code imports (lik
                         if (!prev.isEdit) {
                           updatedState.status = `Completed ${filePath}`;
                         }
+                        pendingFilesRef.current.push({ path: filePath, content: fileContent.trim() });
                         processedFiles.add(filePath);
                       }
                     }
@@ -2087,6 +2166,20 @@ Tip: I automatically detect and install npm packages from your code imports (lik
           // Use isEdit flag that was determined at the start
           // Pass the sandbox data from the promise if it's different from the state
           await applyGeneratedCode(generatedCode, isEdit, activeSandboxData !== sandboxData ? activeSandboxData : undefined);
+          
+          // Save generated files to database
+          const currentProjectId = projectId || new URL(window.location.href).searchParams.get('projectId');
+          if (currentProjectId && pendingFilesRef.current.length > 0) {
+            const filesToSave = pendingFilesRef.current;
+            pendingFilesRef.current = [];
+            Promise.all(filesToSave.map(file =>
+              fetch(`/api/projects/${currentProjectId}/files`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ file_path: file.path, content: file.content }),
+              }).catch(e => console.error('[generation] Failed to save file', e))
+            )).then(() => console.log(`[generation] Saved ${filesToSave.length} files to project ${currentProjectId}`));
+          }
         }
       }
       
@@ -2616,6 +2709,9 @@ Tip: I automatically detect and install npm packages from your code imports (lik
     if (!homeUrlInput.trim()) return;
     const userDescription = homeUrlInput.trim();
     
+    // Clear pending files from any previous generation
+    pendingFilesRef.current = [];
+    
     setHomeScreenFading(true);
     
     // Set immediate loading state for better UX
@@ -2837,6 +2933,7 @@ Focus on creating a polished, professional application that looks great and work
                         if (!prev.isEdit) {
                           updatedState.status = `Completed ${filePath}`;
                         }
+                        pendingFilesRef.current.push({ path: filePath, content: fileContent.trim() });
                         processedFiles.add(filePath);
                       }
                     }

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
+import { useUser, SignIn } from '@clerk/nextjs';
 import { useRouter } from 'next/navigation';
 const bgImage = '/thinksoft-bg.png';
 const logo = '/thinksoft-logo.png';
@@ -115,6 +116,7 @@ const PHRASES = [
 ];
 
 export default function App() {
+  const { isLoaded, isSignedIn } = useUser();
   const router = useRouter();
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
@@ -128,16 +130,41 @@ export default function App() {
   const [tempVoicePrompt, setTempVoicePrompt] = useState("");
   const [voiceError, setVoiceError] = useState("");
   const [volume, setVolume] = useState(0);
+  const [showSignInPrompt, setShowSignInPrompt] = useState(false);
   const recognitionRef = useRef<any>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const animationFrameRef = useRef<number | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
-  const handleSend = () => {
+  const handleSend = async () => {
     const text = promptValue.trim();
     if (!text) return;
     sessionStorage.setItem('userPrompt', text);
+    if (!isLoaded) return;
+    if (!isSignedIn) {
+      setShowSignInPrompt(true);
+      return;
+    }
+    try {
+      const res = await fetch('/api/projects', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: text.slice(0, 60),
+          creator_name: 'You',
+          avatar: '',
+          prompt: text,
+        }),
+      });
+      if (res.ok) {
+        const project = await res.json();
+        window.location.href = `/generation?projectId=${project.id}`;
+        return;
+      }
+    } catch (e) {
+      console.error('Failed to create project', e);
+    }
     window.location.href = '/generation';
   };
 
@@ -652,6 +679,28 @@ export default function App() {
       </div>
       <SearchModal isOpen={isSearchOpen} onClose={() => setIsSearchOpen(false)} />
       <ConnectorsModal isOpen={isConnectorsOpen} onClose={() => setIsConnectorsOpen(false)} />
+
+      {/* Sign-in prompt modal */}
+      {showSignInPrompt && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="relative bg-[#1c1c1c] rounded-2xl border border-white/10 shadow-2xl p-6 max-w-md w-full mx-4">
+            <button
+              onClick={() => setShowSignInPrompt(false)}
+              className="absolute top-4 right-4 text-[#a0a0a0] hover:text-white transition-colors"
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="18" y1="6" x2="6" y2="18" />
+                <line x1="6" y1="6" x2="18" y2="18" />
+              </svg>
+            </button>
+            <SignIn
+              routing="hash"
+              signUpUrl="/signup"
+              forceRedirectUrl={promptValue.trim() ? '/generation' : '/'}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

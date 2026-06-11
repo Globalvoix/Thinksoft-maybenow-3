@@ -992,12 +992,14 @@ CRITICAL: When asked to create a React app or components:
 - NEVER create tailwind.config.js - it's already configured in the template
 - ALWAYS include a Navigation/Header component (Nav.tsx or Header.tsx) - websites need navigation!
 
-REQUIRED COMPONENTS for website clones:
-1. Nav.tsx or Header.tsx - Navigation bar with links (NEVER SKIP THIS!)
-2. Hero.tsx - Main landing section
-3. Features/Services/Products sections - Based on the site content
-4. Footer.tsx - Footer with links and info
-5. App.tsx - Main component that imports and arranges all components
+REQUIRED COMPONENTS for website clones (MINIMUM 6 files):
+1. src/index.css - Styling foundation with Tailwind directives
+2. Nav.tsx or Header.tsx - Navigation bar with links (NEVER SKIP THIS!)
+3. Hero.tsx - Main landing section
+4. Features/Services/Products sections - Based on the site content
+5. Footer.tsx - Footer with links and info
+6. App.tsx - Main component that imports and arranges all components
+- For a complete landing page, expect to generate 8-12 files minimum
 - NEVER create vite.config.js - it's already configured in the template
 - NEVER create package.json - it's already configured in the template
 
@@ -1043,6 +1045,8 @@ CRITICAL COMPLETION RULES:
 4. Generate ALL components in ONE response
 5. If App.tsx imports 10 components, generate ALL 10
 6. Complete EVERYTHING before ending your response
+7. MINIMUM 6 files per initial build (index.css + 5 components)
+8. For landing pages, expect 8-12 files minimum
 
 With 16,000 tokens available, you have plenty of space to generate a complete application. Use it!
 
@@ -1552,7 +1556,7 @@ Examples of CORRECT CODE (ALWAYS DO THIS):
 ✅ const title = "Welcome to our application"
 ✅ import { useState, useEffect, useCallback } from 'react'
 
-REMEMBER: It's better to generate fewer COMPLETE files than many INCOMPLETE files.`
+REMEMBER: Generate EVERY file completely. Do not stop early or skip components.`
             },
             { 
               role: 'user', 
@@ -1571,11 +1575,11 @@ ALWAYS write complete code:
 <h1>Build and deploy on the AI Cloud.</h1>
 <p>Some text here with full content</p>  ✅ CORRECT
 
-If you're running out of space, generate FEWER files but make them COMPLETE.
-It's better to have 3 complete files than 10 incomplete files.`
+Generate ALL requested files completely - you have enough output budget.
+Do NOT stop early or skip files. Complete EVERY component before finishing.`
             }
           ],
-          maxTokens: 8192, // Reduce to ensure completion
+          maxTokens: 16384, // Allow room for complete multi-file generation
           stopSequences: [], // Don't stop early
           tools: aiTools,
           maxSteps: 5,

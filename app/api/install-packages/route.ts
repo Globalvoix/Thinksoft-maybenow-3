@@ -38,7 +38,13 @@ export async function POST(request: NextRequest) {
     }
     
     // Get active sandbox provider
-    const provider = global.activeSandboxProvider;
+    let provider = global.activeSandboxProvider;
+    
+    // Fall back to raw Vercel Sandbox if available
+    if (!provider && (global as any).activeSandbox?.writeFile) {
+      provider = (global as any).activeSandbox;
+      global.activeSandboxProvider = provider;
+    }
     
     if (!provider) {
       return NextResponse.json({ 

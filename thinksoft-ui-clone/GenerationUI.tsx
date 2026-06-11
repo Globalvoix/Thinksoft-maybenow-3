@@ -776,15 +776,27 @@ export default function GenerationUI({
         {activeTab === 'preview' && (
           <div className="flex-1 flex items-center justify-center overflow-y-auto custom-scrollbar md:mr-2 md:mb-2 md:border border-[var(--border-main)] md:rounded-2xl bg-[var(--bg-panel)] relative w-full h-full pb-20 md:pb-0">
             {sandboxUrl ? (
-              <iframe
-                ref={iframeRef}
-                key={previewKey}
-                src={sandboxUrl + (selRefresh > 0 || textEditRefresh > 0 ? '?v=' + selRefresh + '-' + textEditRefresh : '')}
-                onLoad={handleIframeLoad}
-                className="w-full h-full border-0"
-                title="Preview"
-                sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups"
-              />
+              <div
+                className="flex items-center justify-center transition-all duration-300 ease-in-out"
+                style={{
+                  width: deviceMode === 'mobile' ? '375px' : deviceMode === 'tablet' ? '768px' : '100%',
+                  height: deviceMode === 'mobile' ? '812px' : deviceMode === 'tablet' ? '1024px' : '100%',
+                  maxHeight: deviceMode !== 'desktop' ? '90%' : '100%',
+                  borderRadius: deviceMode !== 'desktop' ? deviceMode === 'mobile' ? '36px' : '24px' : '0',
+                  overflow: 'hidden',
+                  boxShadow: deviceMode !== 'desktop' ? '0 0 0 1px rgba(255,255,255,0.1), 0 20px 60px rgba(0,0,0,0.5)' : 'none',
+                }}
+              >
+                <iframe
+                  ref={iframeRef}
+                  key={previewKey}
+                  src={sandboxUrl + (selRefresh > 0 || textEditRefresh > 0 ? '?v=' + selRefresh + '-' + textEditRefresh : '')}
+                  onLoad={handleIframeLoad}
+                  className="w-full h-full border-0"
+                  title="Preview"
+                  sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups"
+                />
+              </div>
             ) : (
               <div className="absolute inset-0 w-full h-full bg-[var(--bg-main)]" />
             )}
