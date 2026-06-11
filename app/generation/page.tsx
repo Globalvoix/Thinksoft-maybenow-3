@@ -108,6 +108,20 @@ function AISandboxPage() {
   const [fileStructure, setFileStructure] = useState<string>('');
   const [streamingAiContent, setStreamingAiContent] = useState('');
   const projectCreationRef = useRef(false);
+  const [generationCard, setGenerationCard] = useState<{
+    isVisible: boolean;
+    status: 'thinking' | 'reviewing' | 'editing' | 'creating' | 'reading' | 'working' | 'searching' | 'installing' | 'applying' | 'completed';
+    title?: string;
+    description?: string;
+    currentFile?: string;
+    files?: string[];
+    summary?: string;
+    isBookmarked: boolean;
+  }>({
+    isVisible: false,
+    status: 'thinking',
+    isBookmarked: false,
+  });
   const pendingFilesRef = useRef<Array<{path: string, content: string}>>([]);
   const [selectedElement, setSelectedElement] = useState<{ tag: string; id: string; classes: string; text: string; selector: string } | null>(null);
   
@@ -443,6 +457,22 @@ function AISandboxPage() {
     if (type === 'user') saveMessageToDb.current(content, 'user');
     else if (type === 'ai') saveMessageToDb.current(content, 'assistant');
     else if (type === 'system') saveMessageToDb.current(content, 'system');
+  };
+
+  const updateGenerationCard = (update: Partial<typeof generationCard>) => {
+    setGenerationCard(prev => ({
+      ...prev,
+      ...update,
+      isVisible: true,
+    }));
+  };
+
+  const clearGenerationCard = () => {
+    setGenerationCard({
+      isVisible: false,
+      status: 'thinking',
+      isBookmarked: false,
+    });
   };
   
   const checkAndInstallPackages = async () => {
@@ -2729,10 +2759,11 @@ Tip: I automatically detect and install npm packages from your code imports (lik
       setChatMessages([]);
     }
 
-    addChatMessage(
-      `Building your web app: "${userDescription}"...`,
-      'system'
-    );
+    updateGenerationCard({
+      status: 'thinking',
+      title: 'Building your web app',
+      description: `Analyzing: "${userDescription}"`,
+    });
     
     // Start creating sandbox if it doesn't exist
     const sandboxPromise = !sandboxData ? createSandbox(true) : Promise.resolve(null);
@@ -2839,12 +2870,14 @@ Focus on creating a polished, professional application that looks great and work
                 
                 if (data.type === 'status') {
                   setGenerationProgress(prev => ({ ...prev, status: data.message }));
+                  updateGenerationCard({ status: 'working', description: data.message });
                 } else if (data.type === 'thinking') {
                   setGenerationProgress(prev => ({ 
                     ...prev, 
                     isThinking: true,
                     thinkingText: (prev.thinkingText || '') + data.text
                   }));
+                  updateGenerationCard({ status: 'thinking', description: data.text || 'Analyzing your request...' });
                 } else if (data.type === 'thinking_complete') {
                   setGenerationProgress(prev => ({ 
                     ...prev, 
@@ -2856,6 +2889,7 @@ Focus on creating a polished, professional application that looks great and work
                     ...prev,
                     status: data.message || 'Working...'
                   }));
+                  updateGenerationCard({ status: 'working', description: data.message || 'Working...' });
                 } else if (data.type === 'conversation') {
                   // Accumulate conversational text for streaming display
                   let text = data.text || '';
@@ -2995,34 +3029,37 @@ Focus on creating a polished, professional application that looks great and work
         }));
         
         if (generatedCode) {
-          addChatMessage('AI app generation complete!', 'system');
-          
-          // Finalize streaming content into a chat message
+          const fileList = generationProgress.files.map(f => f.path);
           const finalContent = streamingAiContent.trim() || explanation || 'Code generated!';
           setStreamingAiContent('');
           
-          if (finalContent) {
-            addChatMessage(finalContent, 'ai');
-          }
-          
           setPromptInput(generatedCode);
+
+          // Update card to show applying
+          updateGenerationCard({
+            status: 'applying',
+            description: 'Applying changes to sandbox...',
+            files: fileList,
+          });
 
           // Apply the code (first time is not edit mode)
           await applyGeneratedCode(generatedCode, false);
 
-          addChatMessage(
-            `Successfully built your web app! You can now ask me to modify it or add more features.`,
-            'ai',
-            {
-              generatedCode: generatedCode
-            }
-          );
+          const allFiles = generationProgress.files.map(f => f.path);
+          const title = `Built ${allFiles.length} files`;
           
+          updateGenerationCard({
+            status: 'completed',
+            title,
+            summary: finalContent || 'Successfully built your web app!',
+            files: allFiles,
+          });
+
           setConversationContext(prev => ({
             ...prev,
             generatedComponents: [],
             appliedCode: [...prev.appliedCode, {
-              files: [],
+              files: allFiles,
               timestamp: new Date()
             }]
           }));
@@ -3125,6 +3162,16 @@ Focus on creating a polished, professional application that looks great and work
         selectedElement={selectedElement}
         onElementSelect={setSelectedElement}
         onQuickTextEdit={handleQuickTextEdit}
+        generationCard={generationCard.isVisible ? {
+          status: generationCard.status,
+          title: generationCard.title,
+          description: generationCard.description,
+          currentFile: generationCard.currentFile,
+          files: generationCard.files,
+          summary: generationCard.summary,
+          isVisible: generationCard.isVisible,
+          isBookmarked: generationCard.isBookmarked,
+        } : undefined}
       />
     </div>
   );

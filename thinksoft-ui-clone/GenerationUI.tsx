@@ -17,6 +17,7 @@ import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { SecretsView } from './components/SecretsView';
 import ChatMessageItem from './components/ChatMessageItem';
+import GenerationCard from './components/GenerationCard';
 import dynamic from 'next/dynamic';
 
 const GraphView = dynamic(() => import('./components/GraphView').then(m => m.GraphView), { ssr: false });
@@ -157,6 +158,16 @@ interface GenerationUIProps {
   selectedElement?: SelectedElement | null;
   onElementSelect?: (el: SelectedElement | null) => void;
   onQuickTextEdit?: (oldText: string, newText: string) => void;
+  generationCard?: {
+    isVisible: boolean;
+    status: 'thinking' | 'reviewing' | 'editing' | 'creating' | 'reading' | 'working' | 'searching' | 'installing' | 'applying' | 'completed';
+    title?: string;
+    description?: string;
+    currentFile?: string;
+    files?: string[];
+    summary?: string;
+    isBookmarked: boolean;
+  };
 }
 
 const tabs = [
@@ -174,7 +185,8 @@ export default function GenerationUI({
   files = [], selectedFile, onFileSelect, codeContent = '',
   sandboxId, streamingAiContent = '',
   selectedElement, onElementSelect,
-  onQuickTextEdit
+  onQuickTextEdit,
+  generationCard
 }: GenerationUIProps) {
   const [showMobilePreview, setShowMobilePreview] = useState(false);
   const [mobileBottomState, setMobileBottomState] = useState<'default' | 'slash' | 'share' | 'recording' | 'transcribing' | 'transcribed' | 'project' | 'appearance'>('default');
@@ -379,6 +391,18 @@ export default function GenerationUI({
                 timestamp={msg.timestamp}
               />
             ))}
+            {generationCard?.isVisible && (
+              <GenerationCard
+                status={generationCard.status}
+                title={generationCard.title}
+                description={generationCard.description}
+                currentFile={generationCard.currentFile}
+                files={generationCard.files}
+                summary={generationCard.summary}
+                isVisible={generationCard.isVisible}
+                isBookmarked={generationCard.isBookmarked}
+              />
+            )}
             {streamingAiContent && (
               <ChatMessageItem
                 content=""
