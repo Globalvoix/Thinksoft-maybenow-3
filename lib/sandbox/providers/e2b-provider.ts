@@ -2,6 +2,7 @@ import { Sandbox } from '@e2b/code-interpreter';
 import { SandboxProvider, SandboxInfo, CommandResult } from '../types';
 // SandboxProviderConfig available through parent class
 import { appConfig } from '@/config/app.config';
+import { createRichViteStarterFiles } from '@/lib/sandbox/starter-template';
 
 export class E2BProvider extends SandboxProvider {
   private existingFiles: Set<string> = new Set();
@@ -422,6 +423,24 @@ print('\\nAll files created successfully!')
 `;
 
     await this.sandbox.runCode(setupScript);
+
+    const starterFiles = createRichViteStarterFiles({
+      port: 5173,
+      allowedHosts: ['.e2b.app', '.e2b.dev', '.vercel.run', 'localhost', '127.0.0.1'],
+      hmr: false
+    });
+
+    await this.sandbox.runCode(`
+import os
+os.makedirs('/home/user/app/src/components/ui', exist_ok=True)
+os.makedirs('/home/user/app/src/lib', exist_ok=True)
+os.makedirs('/home/user/app/src/hooks', exist_ok=True)
+print('Created rich starter directories')
+`);
+
+    for (const file of starterFiles) {
+      await this.writeFile(file.path, file.content);
+    }
     
     // Install dependencies
     await this.sandbox.runCode(`

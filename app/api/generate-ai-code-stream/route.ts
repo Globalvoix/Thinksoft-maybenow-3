@@ -24,6 +24,151 @@ export const dynamic = 'force-dynamic';
 const isUsingAIGateway = !!process.env.AI_GATEWAY_API_KEY;
 const aiGatewayBaseURL = 'https://ai-gateway.vercel.sh/v1';
 
+type GenerationProfile = {
+  name: 'edit' | 'small' | 'medium' | 'full-app' | 'production-system';
+  maxTokens: number;
+  maxSteps: number;
+  timeoutMs: number;
+  continuationPasses: number;
+  continuationBatchSize: number;
+  repairAttempts: number;
+};
+
+type PlannedApp = {
+  appType?: string;
+  visualDirection?: string;
+  filesToCreate?: string[];
+  filesToReuse?: string[];
+  packagesNeeded?: string[];
+  uiPrimitivesNeeded?: string[];
+  routes?: string[];
+  backendNeeded?: boolean;
+  databaseNeeded?: boolean;
+  validationPlan?: string[];
+  configFilesNeeded?: string[];
+};
+
+function getGenerationProfile(prompt: string, isEdit: boolean): GenerationProfile {
+  if (isEdit) {
+    return {
+      name: 'edit',
+      maxTokens: 12000,
+      maxSteps: 8,
+      timeoutMs: 90000,
+      continuationPasses: 1,
+      continuationBatchSize: 4,
+      repairAttempts: 2,
+    };
+  }
+
+  const normalized = prompt.toLowerCase();
+  const wantsProduction = /\b(production|full[- ]?stack|system|saas|dashboard|admin|auth|database|backend|api|stripe|payment|e[- ]?commerce|marketplace|crm|erp|multi[- ]?page|routes?)\b/.test(normalized);
+  const wantsFullApp = wantsProduction || /\b(app|application|platform|clone|complete|entire|whole|with login|with signup)\b/.test(normalized);
+  const isSmall = !wantsFullApp && normalized.length < 180;
+
+  if (wantsProduction) {
+    return {
+      name: 'production-system',
+      maxTokens: 30000,
+      maxSteps: 18,
+      timeoutMs: 240000,
+      continuationPasses: 5,
+      continuationBatchSize: 8,
+      repairAttempts: 3,
+    };
+  }
+
+  if (wantsFullApp) {
+    return {
+      name: 'full-app',
+      maxTokens: 24000,
+      maxSteps: 14,
+      timeoutMs: 180000,
+      continuationPasses: 4,
+      continuationBatchSize: 8,
+      repairAttempts: 3,
+    };
+  }
+
+  if (isSmall) {
+    return {
+      name: 'small',
+      maxTokens: 12000,
+      maxSteps: 8,
+      timeoutMs: 90000,
+      continuationPasses: 1,
+      continuationBatchSize: 5,
+      repairAttempts: 2,
+    };
+  }
+
+  return {
+    name: 'medium',
+    maxTokens: 18000,
+    maxSteps: 10,
+    timeoutMs: 140000,
+    continuationPasses: 2,
+    continuationBatchSize: 6,
+    repairAttempts: 2,
+  };
+}
+
+function extractJsonObject(text: string): any | null {
+  const trimmed = text.trim();
+  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const candidate = fenced ? fenced[1].trim() : trimmed;
+
+  try {
+    return JSON.parse(candidate);
+  } catch {}
+
+  const start = candidate.indexOf('{');
+  const end = candidate.lastIndexOf('}');
+  if (start !== -1 && end > start) {
+    try {
+      return JSON.parse(candidate.slice(start, end + 1));
+    } catch {}
+  }
+
+  return null;
+}
+
+function normalizeGeneratedPath(filePath: string) {
+  let normalized = filePath.trim().replace(/^\/+/, '');
+  const fileName = normalized.split('/').pop() || '';
+  const rootAllowed = ['index.html', 'package.json', 'tsconfig.json', 'vite.config.js', 'tailwind.config.js', 'postcss.config.js', 'README.md', 'components.json'];
+
+  if (!normalized.startsWith('src/') &&
+      !normalized.startsWith('public/') &&
+      !normalized.startsWith('supabase/') &&
+      !normalized.startsWith('migrations/') &&
+      !normalized.startsWith('.github/') &&
+      !rootAllowed.includes(fileName)) {
+    normalized = `src/${normalized}`;
+  }
+
+  return normalized;
+}
+
+function extractGeneratedFilePaths(response: string) {
+  const paths = new Set<string>();
+  const regex = /<file path="([^"]+)">[\s\S]*?<\/file>/g;
+  let match;
+  while ((match = regex.exec(response)) !== null) {
+    paths.add(normalizeGeneratedPath(match[1]));
+  }
+  return paths;
+}
+
+function getMissingPlannedFiles(plan: PlannedApp | null, response: string) {
+  if (!plan?.filesToCreate?.length) return [];
+
+  const generated = extractGeneratedFilePaths(response);
+  return plan.filesToCreate
+    .map(file => normalizeGeneratedPath(file))
+    .filter(file => !generated.has(file));
+}
+
 console.log('[generate-ai-code-stream] AI Gateway config:', {
   isUsingAIGateway,
   hasGroqKey: !!process.env.GROQ_API_KEY,
@@ -590,11 +735,12 @@ Remember: You are a SURGEON making a precise incision, not an artist repainting 
         }
 
         // Build system prompt with conversation awareness
-        let systemPrompt = `You are an expert full-stack developer. You generate code using TypeScript (.tsx/.ts) as the primary language, JavaScript (.js/.tsx) where appropriate, CSS (.css), HTML (.html), SQL (.sql) for Supabase migrations, and Deno/TypeScript (.ts) for Edge Functions. You maintain context across messages and build complete, production-ready applications.
+        let systemPrompt = `You are an expert full-stack developer. You generate code using TypeScript (.tsx/.ts) as the primary language, JavaScript (.js/.jsx) where appropriate, CSS (.css), HTML (.html), SQL (.sql) for Supabase migrations, JSON (.json), Markdown (.md), and Deno/TypeScript (.ts) for Edge Functions. You maintain context across messages and build complete, production-ready applications.
 ${conversationContext}
 
 🚨 CRITICAL RULES - YOUR MOST IMPORTANT INSTRUCTIONS:
  0. **EVERY IMPORT YOU WRITE MUST HAVE A CORRESPONDING FILE** - If App.tsx imports "./components/Pricing", you MUST also generate Pricing.tsx. Never reference a component file you didn't create.
+ 0a. **EVERY JSX COMPONENT TAG MUST BE IN SCOPE** - If you write <Badge>, <Button>, <Card>, <Sparkles>, <FeatureCard>, etc., that identifier MUST be imported from a package/file or declared in the same file. Before finishing each .tsx/.jsx file, scan every uppercase JSX tag and verify it has an import or local declaration.
 1. **FOCUS ON THE REQUEST, BUT GENERATE ALL SUPPORTING FILES FOR A WORKING PREVIEW**
    - Generate the components, hooks, utils, and mock data needed for the requested feature to render in the sandbox.
    - Think ahead: if your component imports data, provide mock data. If it fetches from an API, include loading/error states.
@@ -661,7 +807,7 @@ ${conversationContext}
     - .json — package.json, tsconfig.json, config files
     - .js — Vite config, PostCSS config, Tailwind config (non-TypeScript configs)
     - .sql — Supabase migrations, RLS policies, schema definitions
-    - .md — Documentation, README, design.md
+    - .md — Documentation and README files when useful or requested
     - When editing existing projects, match the extension of the file you're editing.
     - For new files in a TypeScript project, ALWAYS use .tsx or .ts.
     - NEVER mix .jsx and .tsx for the same type of file — be consistent within a project.
@@ -678,6 +824,15 @@ ${conversationContext}
     - Use safe lucide-react icons (rule 11) — invalid icon names crash the preview.
     - For social links/footer, use inline SVGs or text instead of lucide-react brand icons.
     - The preview will refresh after all files are applied. Generate complete, working code.
+
+IMPORT AUDIT RULES (PREVENTS RUNTIME ReferenceError):
+- Every uppercase JSX tag requires a matching import or local declaration in that same file.
+- If you use starter UI primitives, import them from the existing files, for example:
+  import { Badge } from './components/ui/badge' or '../ui/badge' depending on the file path.
+  import { Button } from './components/ui/button' or '../ui/button'.
+  import { Card, CardContent, CardHeader, CardTitle } from './components/ui/card' or '../ui/card'.
+- If you use lucide icons like Sparkles, Zap, Shield, ArrowRight, import them from 'lucide-react'.
+- Never assume components are globally available. React does not globally define Badge, Button, Card, icons, or custom sections.
 
 COMPONENT RELATIONSHIPS (CHECK THESE FIRST):
 - Navigation usually lives INSIDE Header.tsx, not separate Nav.tsx
@@ -712,20 +867,22 @@ You have access to the following tools. Use them to explore the codebase, find i
 - listDir(path?): List files in a directory to see the project structure and find where files are located.
 - globFiles(pattern, path?): Find files by name or extension pattern (e.g. "*.tsx", "*Button*").
 - grepFiles(pattern, path?, include?): Search file contents by regex — find imports, function definitions, or usage references.
+- writeFile(filePath, content): Create or replace a complete sandbox file after you know the exact path and full content.
+- editFile(filePath, oldString, newString, replaceAll?): Make precise string replacements in existing files after reading them.
 - runCommand(command): Execute a shell command (npm install, ls, cat, etc.) for package installation or investigation.
 - webSearch(query, numResults?): Search the web for documentation, pricing, tutorials, API references, or recent updates.
 
 WHEN TO USE TOOLS:
 - Before editing: readFile + listDir/grepFiles to understand the component structure
 - Before adding features: readFile the existing files to know what's already there
-- If you need a package: runCommand to install it, then grepFiles/readFile to check the generated code works
+- If you need a package: import it in the generated files and, when necessary, use runCommand to install it
 - If you need current info (API docs, pricing, tutorials): use webSearch
 - If you need to find where something is defined: grepFiles
 
 DESIGN-FIRST WORKFLOW:
 This is a ${isEdit ? 'FOLLOW-UP EDIT' : 'NEW BUILD FROM SCRATCH'}.
 
-${isEdit ? '' : selectedDesign ? `STEP 1 - DESIGN SYSTEM (MANDATORY FOR ALL NEW BUILDS):
+${isEdit ? '' : selectedDesign ? `STEP 1 - DESIGN DIRECTION (MANDATORY FOR ALL NEW BUILDS):
 
 The following design system from ${selectedDesign.brandName} was selected as the best match for your request. ADAPT it to match the user's specific needs — modify colors, typography, spacing, and components to fit their exact request. Do not just copy the brand as-is.
 
@@ -734,17 +891,17 @@ Here is the ${selectedDesign.brandName} design system:
 ${selectedDesign.designContent}
 
 Your task:
-- Create a file called \`design.md\` that adapts this ${selectedDesign.brandName} design system to match the user's specific request
+- Use this design direction internally while generating the application
 - Modify the colors, fonts, spacing, and components as needed — the user's app should NOT look identical to ${selectedDesign.brandName}
-- After creating design.md, generate ALL component files that implement the adapted design system
-- Every design decision in every component MUST reference the token names from your design.md` : `STEP 1 - CREATE DESIGN.MD (MANDATORY FOR ALL NEW BUILDS):
-Before generating any component code, create a file called \`design.md\` that defines the design system for the user's specific request. The design should be custom-tailored to what the user described.
+- Generate ALL component files that implement the adapted design direction
+- Do NOT create design.md unless the user explicitly asks for documentation or a design file` : `STEP 1 - DESIGN DIRECTION (MANDATORY FOR ALL NEW BUILDS):
+Before generating component code, decide on a cohesive visual direction for the user's specific request. Do this internally; do NOT create design.md unless the user explicitly asks for documentation or a design file.
 
 DESIGN GUIDELINES:
 - Read the user's prompt carefully. If they described a specific look (e.g. "dark", "minimal", "playful", "professional", "SaaS-like"), build the design system around that.
 - If they didn't specify a style, invent a unique and cohesive visual direction that fits the brand/industry implied by their request.
 - Every value must be specific (actual hex colors, actual font names, actual px values). Do NOT use generic placeholders like "primary" or "accent".
-- After creating design.md, proceed to build ALL components that implement it.
+- Then build ALL components that implement the design direction.
 
 DESIGN SYSTEM SECTIONS:
 1. Brand colors and palette (primary, secondary, neutral, accent, surface, semantic)
@@ -786,9 +943,9 @@ When building a web application, you MUST include:
 
 CRITICAL: When generating App.tsx that imports components, you MUST generate EVERY component file in the same response. For each import statement you write, create a matching file block. Never leave missing imports.
 
-The FIRST file block in your response MUST be design.md (for new builds), followed by all component files. The file block format is exactly:
-<file path="design.md">content here</file>
+The file block format is exactly:
 <file path="src/components/Hero.tsx">content here</file>
+<file path="src/App.tsx">content here</file>
 
 ${isEdit ? `CRITICAL: THIS IS AN EDIT TO AN EXISTING APPLICATION
 
@@ -1405,6 +1562,15 @@ MORPH FAST APPLY MODE (EDIT-ONLY):
         
         // Track packages that need to be installed
         const packagesToInstall: string[] = [];
+        const generationProfile = getGenerationProfile(prompt, isEdit);
+        let plannedApp: PlannedApp | null = null;
+
+        await sendProgress({
+          type: 'generation-profile',
+          profile: generationProfile.name,
+          maxSteps: generationProfile.maxSteps,
+          continuationPasses: generationProfile.continuationPasses,
+        });
         
         // Determine which provider to use based on model
         const isAnthropic = model.startsWith('anthropic/');
@@ -1435,6 +1601,49 @@ MORPH FAST APPLY MODE (EDIT-ONLY):
         console.log(`[generate-ai-code-stream] Using provider: ${isAnthropic ? 'Anthropic' : isGoogle ? 'Google' : isOpenAI ? 'OpenAI' : 'Groq'}, model: ${actualModel}`);
         console.log(`[generate-ai-code-stream] AI Gateway enabled: ${isUsingAIGateway}`);
         console.log(`[generate-ai-code-stream] Model string: ${model}`);
+
+        // === APPLICATION PLANNING ===
+        // Lovable-like output quality depends on planning the file graph before code generation.
+        if (!isEdit) {
+          try {
+            await sendProgress({ type: 'status', message: 'Planning files, packages, and app structure...' });
+
+            const planResult = await generateText({
+              model: modelProvider(actualModel),
+              messages: [
+                {
+                  role: 'system',
+                  content: `You are an application architect for a Vite + React + TypeScript code generator.
+Return a concise implementation plan as JSON only. Use these keys:
+appType, visualDirection, filesToCreate, filesToReuse, packagesNeeded, uiPrimitivesNeeded, routes, backendNeeded, databaseNeeded, validationPlan, configFilesNeeded.
+For ${generationProfile.name} mode, plan enough files for a complete working app, not just a demo. Prefer the existing starter primitives in src/components/ui when useful. Include every imported component file in filesToCreate. Include config files only when truly required.`
+                },
+                {
+                  role: 'user',
+                  content: `User request: ${prompt}\n\nGeneration mode: ${generationProfile.name}\nExisting starter includes reusable UI primitives in src/components/ui, src/lib/utils.ts, and src/hooks/use-mobile.ts.`
+                }
+              ],
+              temperature: 0.2,
+            });
+
+            const buildPlan = planResult.text.trim().slice(0, 3500);
+            if (buildPlan) {
+              plannedApp = extractJsonObject(buildPlan) as PlannedApp | null;
+              const expectedFiles = plannedApp?.filesToCreate?.length
+                ? plannedApp.filesToCreate.map(file => `- ${normalizeGeneratedPath(file)}`).join('\n')
+                : 'Planner did not provide filesToCreate; create all files needed for a working app.';
+
+              const configFiles = plannedApp?.configFilesNeeded?.length
+                ? plannedApp.configFilesNeeded.map(file => `- ${normalizeGeneratedPath(file)}`).join('\n')
+                : 'No config files planned.';
+
+              fullPrompt = `APPLICATION PLAN (follow this unless it conflicts with the user request):\n${buildPlan}\n\nEXPECTED FILE MANIFEST:\n${expectedFiles}\n\nPLANNED CONFIG FILE CHANGES:\n${configFiles}\n\nIf you must modify config files, include <allow_config_changes>true</allow_config_changes> before the file blocks and only modify the planned config files.\n\n---\n\n${fullPrompt}`;
+              await sendProgress({ type: 'plan', plan: buildPlan });
+            }
+          } catch (planningError) {
+            console.error('[generate-ai-code-stream] Planning failed (non-fatal):', planningError);
+          }
+        }
 
         // === MULTI-TASK DECOMPOSITION ===
         // If the prompt contains multiple tasks, decompose into a task list
@@ -1540,8 +1749,8 @@ CRITICAL STRING RULES TO PREVENT SYNTAX ERRORS:
 - NO ellipsis (...) ANYWHERE in code
 
 PACKAGE RULES:
-- For INITIAL generation: Use ONLY React, no external packages
-- For EDITS: You may use packages, specify them with <package> tags
+- For INITIAL generation: You may use the installed starter dependencies (React, Tailwind, lucide-react, clsx, tailwind-merge, class-variance-authority) and may add other packages when the requested app genuinely needs them
+- For EDITS: You may use packages, specify them with <package> tags when helpful
 - NEVER install packages like @mendable/firecrawl-js unless explicitly requested
 
 Examples of SYNTAX ERRORS (NEVER DO THIS):
@@ -1555,6 +1764,11 @@ Examples of CORRECT CODE (ALWAYS DO THIS):
 ✅ <button className="btn btn-primary btn-large">
 ✅ const title = "Welcome to our application"
 ✅ import { useState, useEffect, useCallback } from 'react'
+
+CONFIG CHANGE RULE:
+- You may generate config/root files only when they are required by the plan or the user's request.
+- If you output package.json, vite.config.js, tailwind.config.js, tsconfig.json, postcss.config.js, or similar root config files, include <allow_config_changes>true</allow_config_changes> before the file blocks.
+- Prefer adding application files over changing config unless config is truly required.
 
 REMEMBER: Generate EVERY file completely. Do not stop early or skip components.`
             },
@@ -1579,10 +1793,10 @@ Generate ALL requested files completely - you have enough output budget.
 Do NOT stop early or skip files. Complete EVERY component before finishing.`
             }
           ],
-          maxTokens: 16384, // Allow room for complete multi-file generation
+          maxOutputTokens: generationProfile.maxTokens,
           stopSequences: [], // Don't stop early
           tools: aiTools,
-          maxSteps: 5,
+          maxSteps: generationProfile.maxSteps,
         };
         
         // Add temperature for non-reasoning models
@@ -1602,7 +1816,7 @@ Do NOT stop early or skip files. Complete EVERY component before finishing.`
         let result;
         let retryCount = 0;
         const maxRetries = 2;
-        const TIMEOUT_MS = 30000; // 30s timeout per attempt
+        const TIMEOUT_MS = generationProfile.timeoutMs;
         
         await sendProgress({ type: 'info', message: 'Starting generation (may take a few seconds)...' });
         
@@ -1803,6 +2017,87 @@ Do NOT stop early or skip files. Complete EVERY component before finishing.`
         }
         
         console.log('\n\n[generate-ai-code-stream] Streaming complete.');
+
+        // === MISSING FILE CONTINUATION ===
+        // If the planner expected more files than the first pass produced, continue in batches.
+        if (!isEdit && plannedApp?.filesToCreate?.length) {
+          for (let pass = 1; pass <= generationProfile.continuationPasses; pass++) {
+            const missingFiles = getMissingPlannedFiles(plannedApp, generatedCode);
+            if (missingFiles.length === 0) break;
+
+            const batch = missingFiles.slice(0, generationProfile.continuationBatchSize);
+            await sendProgress({
+              type: 'continuation',
+              pass,
+              remaining: missingFiles.length,
+              files: batch,
+              message: `Continuing generation for ${batch.length} missing planned files...`
+            });
+
+            const generatedPaths = [...extractGeneratedFilePaths(generatedCode)].join('\n');
+            const continuationPrompt = `The initial generation did not include every planned file.
+
+Original user request:
+${prompt}
+
+Already generated files:
+${generatedPaths || '(none)'}
+
+Generate ONLY these missing files in complete <file path="...">...</file> blocks:
+${batch.map(file => `- ${file}`).join('\n')}
+
+Rules:
+- Do not repeat files already generated unless absolutely required for imports.
+- Every JSX component tag must be imported or declared in the same file.
+- Every import of a local component must have a corresponding file in this batch or in the already generated files list.
+- Output only file blocks and optional <package> tags. No markdown fences.`;
+
+            try {
+              const continuationOptions: any = {
+                model: modelProvider(actualModel),
+                messages: [
+                  { role: 'system', content: systemPrompt },
+                  { role: 'user', content: continuationPrompt }
+                ],
+                maxOutputTokens: Math.min(generationProfile.maxTokens, 18000),
+                maxSteps: Math.min(generationProfile.maxSteps, 8),
+                tools: aiTools,
+                temperature: model.startsWith('openai/gpt-5') ? undefined : 0.5,
+              };
+
+              const continuationResult = await streamText(continuationOptions);
+
+              let continuationText = '';
+              for await (const chunk of continuationResult.textStream) {
+                continuationText += chunk;
+                await sendProgress({
+                  type: 'stream',
+                  text: chunk,
+                  raw: true
+                });
+              }
+
+              generatedCode += `\n\n${continuationText}`;
+              console.log(`[generate-ai-code-stream] Continuation pass ${pass} added ${continuationText.length} chars`);
+            } catch (continuationError) {
+              console.error(`[generate-ai-code-stream] Continuation pass ${pass} failed:`, continuationError);
+              await sendProgress({
+                type: 'warning',
+                message: `Continuation pass ${pass} failed. Applying files generated so far.`
+              });
+              break;
+            }
+          }
+
+          const stillMissing = getMissingPlannedFiles(plannedApp, generatedCode);
+          if (stillMissing.length > 0) {
+            await sendProgress({
+              type: 'warning',
+              message: `${stillMissing.length} planned files were still missing after continuation passes`,
+              files: stillMissing
+            });
+          }
+        }
         
         // Send any remaining conversational text
         if (conversationalBuffer.trim()) {
@@ -2177,6 +2472,9 @@ Provide the complete file content without any truncation. Include all necessary 
           components: componentCount,
           model,
           packagesToInstall: packagesToInstall.length > 0 ? packagesToInstall : undefined,
+          generationProfile: generationProfile.name,
+          plannedFiles: plannedApp?.filesToCreate,
+          missingPlannedFiles: plannedApp ? getMissingPlannedFiles(plannedApp, generatedCode) : undefined,
           warnings: truncationWarnings.length > 0 ? truncationWarnings : undefined
         });
         

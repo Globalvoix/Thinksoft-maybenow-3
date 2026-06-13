@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { Sandbox } from '@vercel/sandbox';
 import type { SandboxState } from '@/types/sandbox';
 import { appConfig } from '@/config/app.config';
+import { createRichViteStarterFiles } from '@/lib/sandbox/starter-template';
 
 // Store active sandbox globally
 declare global {
@@ -127,189 +128,21 @@ async function createSandboxInternal() {
     const sandboxHostname = new URL(sandboxUrl).hostname;
     console.log(`[create-ai-sandbox] Sandbox hostname: ${sandboxHostname}`);
 
-    // Create the Vite config content with the proper hostname (using string concatenation)
-    const viteConfigContent = `import { defineConfig } from 'vite'
-import react from '@vitejs/plugin-react'
+    const starterFiles = createRichViteStarterFiles({
+      port: appConfig.vercelSandbox.devPort,
+      allowedHosts: ['localhost', '127.0.0.1', sandboxHostname, '.vercel.run', '.vercel-sandbox.dev'],
+      hmr: '    hmr: true,'
+    });
 
-// Vercel Sandbox compatible Vite configuration
-export default defineConfig({
-  plugins: [react()],
-  server: {
-    host: '0.0.0.0',
-    port: ${appConfig.vercelSandbox.devPort},
-    strictPort: true,
-    hmr: true,
-    allowedHosts: [
-      'localhost',
-      '127.0.0.1',
-      '` + sandboxHostname + `', // Allow the Vercel Sandbox domain
-      '.vercel.run', // Allow all Vercel sandbox domains
-      '.vercel-sandbox.dev' // Fallback pattern
-    ]
-  }
-})`;
-
-    // Create the project files (now we have the sandbox hostname)
-    const projectFiles = [
-      {
-        path: 'package.json',
-        content: Buffer.from(JSON.stringify({
-          "name": "sandbox-app",
-          "version": "1.0.0",
-          "type": "module",
-          "scripts": {
-            "dev": "vite --host --port 3000",
-            "build": "vite build",
-            "preview": "vite preview"
-          },
-          "dependencies": {
-            "react": "^18.2.0",
-            "react-dom": "^18.2.0"
-          },
-          "devDependencies": {
-            "@vitejs/plugin-react": "^4.0.0",
-            "vite": "^4.3.9",
-            "tailwindcss": "^3.3.0",
-            "postcss": "^8.4.31",
-            "autoprefixer": "^10.4.16",
-            "typescript": "^5.3.0",
-            "@types/react": "^18.2.0",
-            "@types/react-dom": "^18.2.0"
-          }
-        }, null, 2))
-      },
-      {
-        path: 'tsconfig.json',
-        content: Buffer.from(JSON.stringify({
-          compilerOptions: {
-            target: "ES2020",
-            useDefineForClassFields: true,
-            lib: ["ES2020", "DOM", "DOM.Iterable"],
-            module: "ESNext",
-            skipLibCheck: true,
-            moduleResolution: "bundler",
-            allowImportingTsExtensions: true,
-            isolatedModules: true,
-            moduleDetection: "force",
-            noEmit: true,
-            jsx: "react-jsx",
-            strict: true,
-            noUnusedLocals: false,
-            noUnusedParameters: false,
-            noFallthroughCasesInSwitch: true,
-            forceConsistentCasingInFileNames: true
-          },
-          include: ["src"]
-        }, null, 2))
-      },
-      {
-        path: 'vite.config.js',
-        content: Buffer.from(viteConfigContent)
-      },
-      {
-        path: 'tailwind.config.js',
-        content: Buffer.from(`/** @type {import('tailwindcss').Config} */
-export default {
-  content: [
-    "./index.html",
-    "./src/**/*.{js,ts,jsx,tsx}",
-  ],
-  theme: {
-    extend: {},
-  },
-  plugins: [],
-}`)
-      },
-      {
-        path: 'postcss.config.js',
-        content: Buffer.from(`export default {
-  plugins: {
-    tailwindcss: {},
-    autoprefixer: {},
-  },
-}`)
-      },
-      {
-        path: 'index.html',
-        content: Buffer.from(`<!DOCTYPE html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Sandbox App</title>
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
-  </body>
-</html>`)
-      },
-      {
-        path: 'src/main.tsx',
-        content: Buffer.from(`import React from 'react'
-import ReactDOM from 'react-dom/client'
-import App from './App'
-import './index.css'
-
-ReactDOM.createRoot(document.getElementById('root')!).render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>,
-)`)
-      },
-      {
-        path: 'src/App.tsx',
-        content: Buffer.from(`function App() {
-  return (
-    <div className="min-h-screen bg-gray-900 text-white flex items-center justify-center p-4">
-      <div className="text-center max-w-2xl">
-        <h1 className="text-4xl font-bold mb-4 bg-gradient-to-r from-blue-500 to-purple-600 bg-clip-text text-transparent">
-          Sandbox Ready
-        </h1>
-        <p className="text-lg text-gray-400">
-          Start building your React app with Vite and Tailwind CSS!
-        </p>
-      </div>
-    </div>
-  )
-}
-
-export default App`)
-      },
-      {
-        path: 'src/index.css',
-        content: Buffer.from(`@tailwind base;
-@tailwind components;
-@tailwind utilities;
-
-/* Force Tailwind to load */
-@layer base {
-  :root {
-    font-synthesis: none;
-    text-rendering: optimizeLegibility;
-    -webkit-font-smoothing: antialiased;
-    -moz-osx-font-smoothing: grayscale;
-    -webkit-text-size-adjust: 100%;
-  }
-  
-  * {
-    margin: 0;
-    padding: 0;
-    box-sizing: border-box;
-  }
-}
-
-body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
-  background-color: rgb(17 24 39);
-}`)
-      }
-    ];
+    const projectFiles = starterFiles.map(file => ({
+      path: file.path,
+      content: Buffer.from(file.content)
+    }));
 
     // Create directory structure first
     await sandbox.runCommand({
       cmd: 'mkdir',
-      args: ['-p', 'src']
+      args: ['-p', 'src/components/ui', 'src/lib', 'src/hooks']
     });
     
     // Write all files
@@ -364,15 +197,9 @@ body {
     };
     
     // Track initial files
-    global.existingFiles.add('src/App.tsx');
-    global.existingFiles.add('src/main.tsx');
-    global.existingFiles.add('src/index.css');
-    global.existingFiles.add('index.html');
-    global.existingFiles.add('package.json');
-    global.existingFiles.add('tsconfig.json');
-    global.existingFiles.add('vite.config.js');
-    global.existingFiles.add('tailwind.config.js');
-    global.existingFiles.add('postcss.config.js');
+    for (const file of starterFiles) {
+      global.existingFiles.add(file.path);
+    }
     
     console.log('[create-ai-sandbox] Sandbox ready at:', sandboxUrl);
     

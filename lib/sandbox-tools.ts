@@ -46,7 +46,7 @@ export async function readSandboxFile(
   const provider = getProvider();
   if (!provider) throw new Error('No active sandbox');
 
-  const fullPath = filePath.startsWith('/') ? filePath : `/home/user/app/${filePath}`;
+  const fullPath = filePath;
 
   const content = await provider.readFile(fullPath);
 
@@ -63,11 +63,11 @@ export async function listSandboxDir(path?: string): Promise<string> {
   const provider = getProvider();
   if (!provider) throw new Error('No active sandbox');
 
-  const dir = path || '/home/user/app';
+  const dir = path;
   const files = await provider.listFiles(dir);
 
   if (files.length === 0) {
-    return `<path>${dir}</path>\n<type>directory</type>\n<content>(empty directory)</content>\n`;
+    return `<path>${dir || 'project root'}</path>\n<type>directory</type>\n<content>(empty directory)</content>\n`;
   }
 
   const treeLines: string[] = [];
@@ -97,14 +97,14 @@ export async function listSandboxDir(path?: string): Promise<string> {
     }
   }
 
-  return `<path>${dir}</path>\n<type>directory</type>\n<content>\n${treeLines.join('\n')}\n</content>\n`;
+  return `<path>${dir || 'project root'}</path>\n<type>directory</type>\n<content>\n${treeLines.join('\n')}\n</content>\n`;
 }
 
 export async function globSandboxFiles(pattern: string, path?: string): Promise<string> {
   const provider = getProvider();
   if (!provider) throw new Error('No active sandbox');
 
-  const searchPath = path || '/home/user/app';
+  const searchPath = path || '.';
   const escapedPattern = pattern.replace(/'/g, "'\\''");
   const escapedPath = searchPath.replace(/'/g, "'\\''");
 
@@ -137,7 +137,7 @@ export async function grepSandboxFiles(
   const provider = getProvider();
   if (!provider) throw new Error('No active sandbox');
 
-  const path = searchPath || '/home/user/app';
+  const path = searchPath || '.';
   const escapedPattern = pattern.replace(/'/g, "'\\''");
   const escapedPath = path.replace(/'/g, "'\\''");
   const includeFlag = include ? ` --include='${include.replace(/'/g, "'\\''")}'` : '';
@@ -166,7 +166,7 @@ export async function writeSandboxFile(filePath: string, content: string): Promi
   const provider = getProvider();
   if (!provider) throw new Error('No active sandbox');
 
-  const fullPath = filePath.startsWith('/') ? filePath : `/home/user/app/${filePath}`;
+  const fullPath = filePath;
 
   await provider.writeFile(fullPath, content);
 
@@ -182,7 +182,7 @@ export async function editSandboxFile(
   const provider = getProvider();
   if (!provider) throw new Error('No active sandbox');
 
-  const fullPath = filePath.startsWith('/') ? filePath : `/home/user/app/${filePath}`;
+  const fullPath = filePath;
 
   const content = await provider.readFile(fullPath);
 

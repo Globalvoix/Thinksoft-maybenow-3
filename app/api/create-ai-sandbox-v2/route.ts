@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { SandboxFactory } from '@/lib/sandbox/factory';
 import type { SandboxState } from '@/types/sandbox';
 import { sandboxManager } from '@/lib/sandbox/sandbox-manager';
+import { richStarterFilePaths } from '@/lib/sandbox/starter-template';
 
 // Store active sandbox globally
 declare global {
@@ -42,6 +43,10 @@ export async function POST(request: NextRequest) {
     
     console.log('[create-ai-sandbox-v2] Setting up Vite React app...');
     await provider.setupViteApp();
+
+    for (const filePath of richStarterFilePaths) {
+      global.existingFiles.add(filePath);
+    }
     
     // Register with sandbox manager
     sandboxManager.registerSandbox(sandboxInfo.sandboxId, provider);

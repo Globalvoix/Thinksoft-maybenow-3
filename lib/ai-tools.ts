@@ -4,6 +4,8 @@ import {
   listSandboxDir,
   globSandboxFiles,
   grepSandboxFiles,
+  writeSandboxFile,
+  editSandboxFile,
   runSandboxCommand,
 } from './sandbox-tools';
 import { performWebSearch, formatWebResultsForAI } from './web-search';
@@ -73,6 +75,30 @@ export const runCommandTool = makeTool({
   },
 });
 
+export const writeFileTool = makeTool({
+  description: 'Write a complete file into the sandbox project. Use this when creating a new file or replacing a file after you have determined the exact path and full content.',
+  parameters: z.object({
+    filePath: z.string().describe('Path to write (e.g. "src/components/Header.tsx", "src/lib/data.ts", "README.md")'),
+    content: z.string().describe('Complete file content to write. Do not use ellipsis or partial snippets.'),
+  }),
+  execute: async (args: any) => {
+    return await writeSandboxFile(args.filePath, args.content);
+  },
+});
+
+export const editFileTool = makeTool({
+  description: 'Replace exact text in an existing sandbox file. Use this for precise edits after reading the file. The oldString must match the current file content exactly.',
+  parameters: z.object({
+    filePath: z.string().describe('Path to edit (e.g. "src/components/Header.tsx")'),
+    oldString: z.string().describe('Exact text currently in the file'),
+    newString: z.string().describe('Replacement text'),
+    replaceAll: z.boolean().optional().describe('Replace every occurrence instead of just the first one'),
+  }),
+  execute: async (args: any) => {
+    return await editSandboxFile(args.filePath, args.oldString, args.newString, args.replaceAll);
+  },
+});
+
 export const webSearchTool = makeTool({
   description: 'Search the web for current information, documentation, API references, pricing, tutorials, or any up-to-date content. Use this when you need information about libraries, frameworks, best practices, or recent changes.',
   parameters: z.object({
@@ -90,6 +116,8 @@ export const aiTools = {
   listDir: listDirTool,
   globFiles: globFilesTool,
   grepFiles: grepFilesTool,
+  writeFile: writeFileTool,
+  editFile: editFileTool,
   runCommand: runCommandTool,
   webSearch: webSearchTool,
 };

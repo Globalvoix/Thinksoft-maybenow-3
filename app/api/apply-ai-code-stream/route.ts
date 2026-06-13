@@ -1,4 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { posix as pathPosix } from 'path';
+import { generateText } from 'ai';
+import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { parseMorphEdits, applyMorphEditToFile } from '@/lib/morph-fast-apply';
 // Sandbox import not needed - using global sandbox from sandbox-manager
 import type { SandboxState } from '@/types/sandbox';
@@ -19,6 +22,7 @@ interface ParsedResponse {
   packages: string[];
   commands: string[];
   structure: string | null;
+  allowConfigChanges: boolean;
 }
 
 const BUILT_IN_MODULES = new Set([
@@ -100,6 +104,332 @@ const extractPackagesFromFiles = (files: Array<{ path: string; content: string }
   return [...packages];
 };
 
+const KNOWN_UI_IMPORTS: Record<string, string> = {
+  Badge: 'src/components/ui/badge',
+  Button: 'src/components/ui/button',
+  buttonVariants: 'src/components/ui/button',
+  Card: 'src/components/ui/card',
+  CardHeader: 'src/components/ui/card',
+  CardTitle: 'src/components/ui/card',
+  CardDescription: 'src/components/ui/card',
+  CardContent: 'src/components/ui/card',
+  Input: 'src/components/ui/input',
+  Textarea: 'src/components/ui/textarea',
+  Avatar: 'src/components/ui/avatar',
+  AvatarImage: 'src/components/ui/avatar',
+  AvatarFallback: 'src/components/ui/avatar',
+  Tabs: 'src/components/ui/tabs',
+  TabsList: 'src/components/ui/tabs',
+  TabsTrigger: 'src/components/ui/tabs',
+  TabsContent: 'src/components/ui/tabs',
+  Skeleton: 'src/components/ui/skeleton'
+};
+
+const JSX_GLOBALS = new Set([
+  'Fragment',
+  'React',
+  'Suspense',
+  'StrictMode'
+]);
+
+const LUCIDE_ICON_NAMES = new Set([
+  'Menu', 'X', 'ChevronDown', 'ChevronUp', 'ChevronLeft', 'ChevronRight',
+  'Search', 'Heart', 'Star', 'User', 'Home', 'Mail', 'Phone', 'MapPin',
+  'Globe', 'ExternalLink', 'Share2', 'Send', 'Image', 'Bell', 'Settings',
+  'Sun', 'Moon', 'Trash2', 'Edit', 'Plus', 'Minus', 'Check', 'Copy',
+  'Download', 'Upload', 'File', 'Folder', 'Clock', 'Calendar', 'Camera',
+  'Video', 'Music', 'Book', 'Info', 'AlertCircle', 'HelpCircle', 'DollarSign',
+  'Percent', 'TrendingUp', 'TrendingDown', 'Filter', 'Eye', 'EyeOff', 'Lock',
+  'Unlock', 'ArrowRight', 'ArrowLeft', 'ArrowUp', 'ArrowDown', 'ShoppingCart',
+  'LogOut', 'RefreshCw', 'Maximize2', 'Minimize2', 'Loader2', 'Sparkles',
+  'Zap', 'Shield', 'Rocket', 'Code2', 'Layers', 'Play', 'Pause', 'CircleCheck'
+]);
+
+const ROOT_ALLOWED_FILES = new Set([
+  'index.html',
+  'package.json',
+  'tsconfig.json',
+  'vite.config.js',
+  'tailwind.config.js',
+  'postcss.config.js',
+  'README.md',
+  'components.json',
+  '.gitignore',
+  '.prettierrc',
+  '.prettierignore'
+]);
+
+function normalizeSandboxPath(filePath: string) {
+  let normalizedPath = filePath.trim();
+  if (normalizedPath.startsWith('/')) {
+    normalizedPath = normalizedPath.substring(1);
+  }
+
+  const fileName = normalizedPath.split('/').pop() || '';
+  if (!normalizedPath.startsWith('src/') &&
+      !normalizedPath.startsWith('public/') &&
+      !normalizedPath.startsWith('supabase/') &&
+      !normalizedPath.startsWith('migrations/') &&
+      !ROOT_ALLOWED_FILES.has(fileName)) {
+    normalizedPath = 'src/' + normalizedPath;
+  }
+
+  return normalizedPath;
+}
+
+function getRelativeImportPath(fromFile: string, targetFileWithoutExt: string) {
+  const fromDir = pathPosix.dirname(fromFile);
+  let relative = pathPosix.relative(fromDir, targetFileWithoutExt);
+  if (!relative.startsWith('.')) {
+    relative = `./${relative}`;
+  }
+  return relative;
+}
+
+function collectDefinedIdentifiers(content: string) {
+  const defined = new Set<string>(JSX_GLOBALS);
+
+  const importRegex = /import\s+(?:type\s+)?([\s\S]*?)\s+from\s+['"][^'"]+['"]/g;
+  let importMatch;
+  while ((importMatch = importRegex.exec(content)) !== null) {
+    const clause = importMatch[1].trim();
+    const defaultMatch = clause.match(/^([A-Za-z_$][\w$]*)/);
+    if (defaultMatch) defined.add(defaultMatch[1]);
+
+    const namespaceMatch = clause.match(/\*\s+as\s+([A-Za-z_$][\w$]*)/);
+    if (namespaceMatch) defined.add(namespaceMatch[1]);
+
+    const namedMatch = clause.match(/\{([\s\S]*?)\}/);
+    if (namedMatch) {
+      namedMatch[1].split(',').forEach(part => {
+        const cleaned = part.trim();
+        if (!cleaned) return;
+        const aliasMatch = cleaned.match(/\bas\s+([A-Za-z_$][\w$]*)$/);
+        const name = aliasMatch?.[1] || cleaned.replace(/^type\s+/, '').split(/\s+/)[0];
+        if (name) defined.add(name);
+      });
+    }
+  }
+
+  const declarationPatterns = [
+    /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)/g,
+    /\bfunction\s+([A-Za-z_$][\w$]*)/g,
+    /\bclass\s+([A-Za-z_$][\w$]*)/g,
+    /\b(?:type|interface|enum)\s+([A-Za-z_$][\w$]*)/g
+  ];
+
+  for (const pattern of declarationPatterns) {
+    let match;
+    while ((match = pattern.exec(content)) !== null) {
+      defined.add(match[1]);
+    }
+  }
+
+  return defined;
+}
+
+function collectJsxIdentifiers(content: string) {
+  const used = new Set<string>();
+  const jsxTagRegex = /<\/?\s*([A-Z][A-Za-z0-9_$]*)(?:\.|\s|>|\/)/g;
+  let match;
+  while ((match = jsxTagRegex.exec(content)) !== null) {
+    used.add(match[1]);
+  }
+  return used;
+}
+
+function findMissingJsxIdentifiers(content: string) {
+  const defined = collectDefinedIdentifiers(content);
+  return [...collectJsxIdentifiers(content)].filter(name => !defined.has(name));
+}
+
+function addKnownMissingImports(filePath: string, content: string) {
+  const missing = findMissingJsxIdentifiers(content);
+  const missingKnownUi = missing.filter(name => KNOWN_UI_IMPORTS[name]);
+  const missingLucide = missing.filter(name => LUCIDE_ICON_NAMES.has(name));
+
+  if (missingKnownUi.length === 0 && missingLucide.length === 0) {
+    return { content, addedImports: [] as string[], remainingMissing: findMissingJsxIdentifiers(content) };
+  }
+
+  const bySource = new Map<string, string[]>();
+  for (const name of missingKnownUi) {
+    const source = KNOWN_UI_IMPORTS[name];
+    bySource.set(source, [...(bySource.get(source) || []), name]);
+  }
+
+  const importLines = [...bySource.entries()].map(([source, names]) => {
+    const relativeSource = getRelativeImportPath(filePath, source);
+    const uniqueNames = [...new Set(names)].sort();
+    return `import { ${uniqueNames.join(', ')} } from '${relativeSource}'`;
+  });
+
+  if (missingLucide.length > 0) {
+    importLines.push(`import { ${[...new Set(missingLucide)].sort().join(', ')} } from 'lucide-react'`);
+  }
+
+  const lines = content.split('\n');
+  let insertAt = 0;
+  while (insertAt < lines.length && /^['"]use\s+\w+['"];?$/.test(lines[insertAt].trim())) {
+    insertAt++;
+  }
+  while (insertAt < lines.length && lines[insertAt].trim() === '') {
+    insertAt++;
+  }
+  while (insertAt < lines.length && /^import\s/.test(lines[insertAt])) {
+    insertAt++;
+  }
+
+  const nextContent = [
+    ...lines.slice(0, insertAt),
+    ...importLines,
+    ...lines.slice(insertAt)
+  ].join('\n');
+
+  return {
+    content: nextContent,
+    addedImports: importLines,
+    remainingMissing: findMissingJsxIdentifiers(nextContent)
+  };
+}
+
+async function applyRepairFiles(options: {
+  providerInstance: any;
+  repairResponse: string;
+  allowConfigChanges: boolean;
+  results: { filesUpdated: string[]; errors: string[] };
+  sendProgress: (data: any) => Promise<void>;
+}) {
+  const { providerInstance, repairResponse, allowConfigChanges, results, sendProgress } = options;
+  const parsedRepair = parseAIResponse(repairResponse);
+  const configFiles = new Set(['tailwind.config.js', 'vite.config.js', 'package.json', 'package-lock.json', 'tsconfig.json', 'postcss.config.js']);
+  const canWriteConfig = allowConfigChanges || parsedRepair.allowConfigChanges;
+  let applied = 0;
+
+  const repairPackages = [...new Set([
+    ...parsedRepair.packages,
+    ...extractPackagesFromFiles(parsedRepair.files)
+  ])].filter(pkg => pkg && pkg !== 'react' && pkg !== 'react-dom');
+
+  if (repairPackages.length > 0) {
+    await sendProgress({ type: 'package-progress', message: `Installing repair packages: ${repairPackages.join(', ')}` });
+    try {
+      await providerInstance.installPackages(repairPackages);
+    } catch (error) {
+      results.errors.push(`Repair package install failed: ${(error as Error).message}`);
+    }
+  }
+
+  for (const file of parsedRepair.files) {
+    const normalizedPath = normalizeSandboxPath(file.path);
+    const fileName = normalizedPath.split('/').pop() || '';
+
+    if (configFiles.has(fileName) && !canWriteConfig) {
+      const message = `Skipped repair config file ${file.path}; missing <allow_config_changes>true</allow_config_changes>`;
+      results.errors.push(message);
+      await sendProgress({ type: 'warning', message });
+      continue;
+    }
+
+    let fileContent = file.content;
+    if (normalizedPath.endsWith('.tsx') || normalizedPath.endsWith('.jsx')) {
+      fileContent = addKnownMissingImports(normalizedPath, fileContent).content;
+    }
+
+    if (normalizedPath.endsWith('.css')) {
+      fileContent = fileContent
+        .replace(/shadow-3xl/g, 'shadow-2xl')
+        .replace(/shadow-4xl/g, 'shadow-2xl')
+        .replace(/shadow-5xl/g, 'shadow-2xl');
+    }
+
+    const dirPath = normalizedPath.includes('/') ? normalizedPath.substring(0, normalizedPath.lastIndexOf('/')) : '';
+    if (dirPath) {
+      await providerInstance.runCommand(`mkdir -p ${dirPath}`);
+    }
+
+    await providerInstance.writeFile(normalizedPath, fileContent);
+    if (global.sandboxState?.fileCache) {
+      global.sandboxState.fileCache.files[normalizedPath] = {
+        content: fileContent,
+        lastModified: Date.now()
+      };
+    }
+
+    if (!results.filesUpdated.includes(normalizedPath)) {
+      results.filesUpdated.push(normalizedPath);
+    }
+
+    applied++;
+    await sendProgress({ type: 'file-complete', fileName: normalizedPath, action: 'repair-updated' });
+  }
+
+  return applied;
+}
+
+async function attemptBuildRepair(options: {
+  providerInstance: any;
+  buildOutput: string;
+  candidatePaths: string[];
+  allowConfigChanges: boolean;
+  results: { filesUpdated: string[]; errors: string[] };
+  sendProgress: (data: any) => Promise<void>;
+}) {
+  const { providerInstance, buildOutput, candidatePaths, allowConfigChanges, results, sendProgress } = options;
+
+  if (!process.env.GEMINI_API_KEY) {
+    await sendProgress({ type: 'warning', message: 'Build repair skipped because GEMINI_API_KEY is missing' });
+    return 0;
+  }
+
+  const google = createGoogleGenerativeAI({ apiKey: process.env.GEMINI_API_KEY });
+  const uniquePaths = [...new Set(candidatePaths.map(normalizeSandboxPath))]
+    .filter(path => path.match(/\.(tsx?|jsx?|css|json|html|md)$/))
+    .slice(0, 18);
+
+  const fileContexts: string[] = [];
+  for (const path of uniquePaths) {
+    try {
+      const content = await providerInstance.readFile(path);
+      fileContexts.push(`<file path="${path}">\n${content.slice(0, 14000)}\n</file>`);
+    } catch {}
+  }
+
+  const repairPrompt = `The generated Vite React app failed validation. Return only complete <file path="...">...</file> blocks for the minimal files needed to fix the build.
+
+Build output:
+${buildOutput.slice(0, 12000)}
+
+Candidate files:
+${fileContexts.join('\n\n')}
+
+Rules:
+- Fix missing imports, missing files, invalid JSX, TypeScript errors, bad package imports, and invalid Tailwind classes.
+- Every uppercase JSX tag must be imported or declared.
+- If a required local component file is missing, create it.
+- Do not rewrite unrelated files.
+- If you must change config/root files, include <allow_config_changes>true</allow_config_changes>.
+- Output no markdown fences.`;
+
+  const repairResult = await generateText({
+    model: google('gemini-2.0-flash'),
+    messages: [
+      { role: 'system', content: 'You are a senior build repair agent. Produce minimal complete file blocks that fix the failed build.' },
+      { role: 'user', content: repairPrompt }
+    ],
+    temperature: 0.1,
+    maxOutputTokens: 16000,
+  });
+
+  return await applyRepairFiles({
+    providerInstance,
+    repairResponse: repairResult.text,
+    allowConfigChanges,
+    results,
+    sendProgress
+  });
+}
+
 function parseAIResponse(response: string): ParsedResponse {
   const sections = {
     files: [] as Array<{ path: string; content: string }>,
@@ -107,7 +437,8 @@ function parseAIResponse(response: string): ParsedResponse {
     packages: [] as string[],
     structure: null as string | null,
     explanation: '',
-    template: ''
+    template: '',
+    allowConfigChanges: /<allow_config_changes>\s*true\s*<\/allow_config_changes>/i.test(response)
   };
 
   // Parse file sections - handle duplicates and prefer complete versions
@@ -595,8 +926,21 @@ export async function POST(request: NextRequest) {
         let filteredFiles = filesArray.filter(file => {
           if (!file || typeof file !== 'object') return false;
           const fileName = (file.path || '').split('/').pop() || '';
-          return !configFiles.includes(fileName);
+          if (configFiles.includes(fileName) && !parsed.allowConfigChanges) {
+            const message = `Skipped config file ${file.path}; missing <allow_config_changes>true</allow_config_changes>`;
+            console.warn(`[apply-ai-code-stream] ${message}`);
+            results.errors.push(message);
+            return false;
+          }
+          return true;
         });
+
+        if (parsed.allowConfigChanges) {
+          await sendProgress({
+            type: 'warning',
+            message: 'Applying planned config/root file changes'
+          });
+        }
 
         // If Morph is enabled and we have edits, apply them before file writes
         const morphUpdatedPaths = new Set<string>();
@@ -641,14 +985,7 @@ export async function POST(request: NextRequest) {
         if (morphUpdatedPaths.size > 0) {
           filteredFiles = filteredFiles.filter(file => {
             if (!file?.path) return true;
-            let normalizedPath = file.path.startsWith('/') ? file.path.slice(1) : file.path;
-            const fileName = normalizedPath.split('/').pop() || '';
-            if (!normalizedPath.startsWith('src/') &&
-                !normalizedPath.startsWith('public/') &&
-                normalizedPath !== 'index.html' &&
-                !configFiles.includes(fileName)) {
-              normalizedPath = 'src/' + normalizedPath;
-            }
+            const normalizedPath = normalizeSandboxPath(file.path);
             return !morphUpdatedPaths.has(normalizedPath);
           });
         }
@@ -665,16 +1002,7 @@ export async function POST(request: NextRequest) {
             });
 
             // Normalize the file path
-            let normalizedPath = file.path;
-            if (normalizedPath.startsWith('/')) {
-              normalizedPath = normalizedPath.substring(1);
-            }
-            if (!normalizedPath.startsWith('src/') &&
-              !normalizedPath.startsWith('public/') &&
-              normalizedPath !== 'index.html' &&
-              !configFiles.includes(normalizedPath.split('/').pop() || '')) {
-              normalizedPath = 'src/' + normalizedPath;
-            }
+            const normalizedPath = normalizeSandboxPath(file.path);
 
             const isUpdate = global.existingFiles.has(normalizedPath);
 
@@ -682,6 +1010,33 @@ export async function POST(request: NextRequest) {
             let fileContent = file.content;
             if (file.path.endsWith('.jsx') || file.path.endsWith('.js') || file.path.endsWith('.tsx') || file.path.endsWith('.ts')) {
               fileContent = fileContent.replace(/import\s+['"]\.\/[^'"]+\.css['"];?\s*\n?/g, '');
+            }
+
+            if (file.path.endsWith('.tsx') || file.path.endsWith('.jsx')) {
+              const repaired = addKnownMissingImports(normalizedPath, fileContent);
+              fileContent = repaired.content;
+
+              if (repaired.addedImports.length > 0) {
+                console.log(`[apply-ai-code-stream] Added missing UI imports to ${normalizedPath}:`, repaired.addedImports);
+                await sendProgress({
+                  type: 'info',
+                  message: `Added missing UI imports in ${normalizedPath}`
+                });
+              }
+
+              if (repaired.remainingMissing.length > 0) {
+                const message = `Potential missing JSX imports in ${normalizedPath}: ${repaired.remainingMissing.join(', ')}`;
+                console.warn(`[apply-ai-code-stream] ${message}`);
+                if (results.errors) {
+                  results.errors.push(message);
+                }
+                await sendProgress({
+                  type: 'validation-error',
+                  success: false,
+                  fileName: normalizedPath,
+                  error: message
+                });
+              }
             }
 
             // Fix common Tailwind CSS errors in CSS files
@@ -799,6 +1154,75 @@ export async function POST(request: NextRequest) {
               });
             }
           }
+        }
+
+        // Step 4: Validate and repair the generated app. This turns build failures
+        // into targeted fix passes instead of leaving the preview broken.
+        try {
+          await sendProgress({
+            type: 'step',
+            step: 4,
+            message: 'Validating generated app...'
+          });
+
+          let validation = await providerInstance.runCommand('npm run build');
+          let validationOutput = [validation.stdout, validation.stderr].filter(Boolean).join('\n');
+          const buildRepairAttempts = 3;
+
+          for (let attempt = 1; validation.exitCode !== 0 && attempt <= buildRepairAttempts; attempt++) {
+            await sendProgress({
+              type: 'validation-error',
+              success: false,
+              exitCode: validation.exitCode,
+              attempt,
+              output: validationOutput.slice(0, 12000),
+              message: `Build failed. Attempting automatic repair ${attempt}/${buildRepairAttempts}...`
+            });
+
+            const candidatePaths = [
+              ...results.filesCreated,
+              ...results.filesUpdated,
+              ...filteredFiles.map(file => normalizeSandboxPath(file.path))
+            ];
+
+            const repairedFiles = await attemptBuildRepair({
+              providerInstance,
+              buildOutput: validationOutput,
+              candidatePaths,
+              allowConfigChanges: parsed.allowConfigChanges,
+              results,
+              sendProgress
+            });
+
+            if (repairedFiles === 0) {
+              break;
+            }
+
+            validation = await providerInstance.runCommand('npm run build');
+            validationOutput = [validation.stdout, validation.stderr].filter(Boolean).join('\n');
+          }
+
+          await sendProgress({
+            type: validation.exitCode === 0 ? 'validation-complete' : 'validation-error',
+            success: validation.exitCode === 0,
+            exitCode: validation.exitCode,
+            output: validationOutput.slice(0, 12000)
+          });
+
+          if (validation.exitCode !== 0 && results.errors) {
+            results.errors.push(`Build validation failed after repair attempts:\n${validationOutput.slice(0, 4000)}`);
+          }
+        } catch (validationError) {
+          const message = validationError instanceof Error ? validationError.message : 'Validation failed';
+          console.error('[apply-ai-code-stream] Build validation failed:', validationError);
+          if (results.errors) {
+            results.errors.push(`Build validation failed: ${message}`);
+          }
+          await sendProgress({
+            type: 'validation-error',
+            success: false,
+            error: message
+          });
         }
 
         // Send final results

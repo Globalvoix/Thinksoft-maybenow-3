@@ -1,6 +1,7 @@
 import { Sandbox } from '@vercel/sandbox';
 import { SandboxProvider, SandboxInfo, CommandResult } from '../types';
 import { appConfig } from '@/config/app.config';
+import { createRichViteStarterFiles } from '@/lib/sandbox/starter-template';
 
 export class VercelProvider extends SandboxProvider {
   private existingFiles: Set<string> = new Set();
@@ -332,171 +333,18 @@ export class VercelProvider extends SandboxProvider {
     // Create directory structure
     const mkdirResult = await this.sandbox.runCommand({
       cmd: 'mkdir',
-      args: ['-p', '/vercel/sandbox/src']
+      args: ['-p', '/vercel/sandbox/src/components/ui', '/vercel/sandbox/src/lib', '/vercel/sandbox/src/hooks']
     });
     // Directory structure created
-    
-    // Create package.json
-    const packageJson = {
-      name: "sandbox-app",
-      version: "1.0.0",
-      type: "module",
-      scripts: {
-        dev: "vite --host",
-        build: "vite build",
-        preview: "vite preview"
-      },
-      dependencies: {
-        react: "^18.2.0",
-        "react-dom": "^18.2.0"
-      },
-      devDependencies: {
-        "@vitejs/plugin-react": "^4.0.0",
-        vite: "^4.3.9",
-        tailwindcss: "^3.3.0",
-        postcss: "^8.4.31",
-        autoprefixer: "^10.4.16",
-        typescript: "^5.3.0",
-        "@types/react": "^18.2.0",
-        "@types/react-dom": "^18.2.0"
-      }
-    };
-    
-    await this.writeFile('package.json', JSON.stringify(packageJson, null, 2));
-    
-    // Create tsconfig.json
-    const tsconfigJson = `{
-  "compilerOptions": {
-    "target": "ES2020",
-    "useDefineForClassFields": true,
-    "lib": ["ES2020", "DOM", "DOM.Iterable"],
-    "module": "ESNext",
-    "skipLibCheck": true,
-    "moduleResolution": "bundler",
-    "allowImportingTsExtensions": true,
-    "isolatedModules": true,
-    "moduleDetection": "force",
-    "noEmit": true,
-    "jsx": "react-jsx",
-    "strict": true,
-    "noUnusedLocals": false,
-    "noUnusedParameters": false,
-    "noFallthroughCasesInSwitch": true,
-    "forceConsistentCasingInFileNames": true
-  },
-  "include": ["src"]
-}`;
-    
-    await this.writeFile('tsconfig.json', tsconfigJson);
-    
-    // Create vite.config.js
-    const viteConfig = `import { defineConfig } from 'vite'
-import react from '@vitejs/plugin-react'
 
-export default defineConfig({
-  plugins: [react()],
-  server: {
-    host: '0.0.0.0',
-    port: 5173,
-    strictPort: true,
-    allowedHosts: [
-      '.vercel.run',  // Allow all Vercel sandbox domains
-      '.e2b.dev',     // Allow all E2B sandbox domains
-      'localhost'
-    ],
-    hmr: {
-      clientPort: 443,
-      protocol: 'wss'
+    const starterFiles = createRichViteStarterFiles({
+      port: 5173,
+      allowedHosts: ['.vercel.run', '.vercel-sandbox.dev', '.e2b.dev', 'localhost', '127.0.0.1']
+    });
+
+    for (const file of starterFiles) {
+      await this.writeFile(file.path, file.content);
     }
-  }
-})`;
-    
-    await this.writeFile('vite.config.js', viteConfig);
-    
-    // Create tailwind.config.js
-    const tailwindConfig = `/** @type {import('tailwindcss').Config} */
-export default {
-  content: [
-    "./index.html",
-    "./src/**/*.{js,ts,jsx,tsx}",
-  ],
-  theme: {
-    extend: {},
-  },
-  plugins: [],
-}`;
-    
-    await this.writeFile('tailwind.config.js', tailwindConfig);
-    
-    // Create postcss.config.js
-    const postcssConfig = `export default {
-  plugins: {
-    tailwindcss: {},
-    autoprefixer: {},
-  },
-}`;
-    
-    await this.writeFile('postcss.config.js', postcssConfig);
-    
-    // Create index.html
-    const indexHtml = `<!DOCTYPE html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Sandbox App</title>
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
-  </body>
-</html>`;
-    
-    await this.writeFile('index.html', indexHtml);
-    
-    // Create src/main.tsx
-    const mainTsx = `import React from 'react'
-import ReactDOM from 'react-dom/client'
-import App from './App'
-import './index.css'
-
-ReactDOM.createRoot(document.getElementById('root')!).render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>,
-)`;
-    
-    await this.writeFile('src/main.tsx', mainTsx);
-    
-    // Create src/App.tsx
-    const appTsx = `function App() {
-  return (
-    <div className="min-h-screen bg-gray-900 text-white flex items-center justify-center p-4">
-      <div className="text-center max-w-2xl">
-        <p className="text-lg text-gray-400">
-          Vercel Sandbox Ready<br/>
-          Start building your React app with Vite and Tailwind CSS!
-        </p>
-      </div>
-    </div>
-  )
-}
-
-export default App`;
-    
-    await this.writeFile('src/App.tsx', appTsx);
-    
-    // Create src/index.css
-    const indexCss = `@tailwind base;
-@tailwind components;
-@tailwind utilities;
-
-body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
-  background-color: rgb(17 24 39);
-}`;
-    
-    await this.writeFile('src/index.css', indexCss);
     
     // Installing npm dependencies
     
@@ -562,15 +410,9 @@ body {
     await new Promise(resolve => setTimeout(resolve, 7000));
     
     // Track initial files
-    this.existingFiles.add('src/App.tsx');
-    this.existingFiles.add('src/main.tsx');
-    this.existingFiles.add('src/index.css');
-    this.existingFiles.add('index.html');
-    this.existingFiles.add('package.json');
-    this.existingFiles.add('tsconfig.json');
-    this.existingFiles.add('vite.config.js');
-    this.existingFiles.add('tailwind.config.js');
-    this.existingFiles.add('postcss.config.js');
+    for (const file of starterFiles) {
+      this.existingFiles.add(file.path);
+    }
   }
 
   async restartViteServer(): Promise<void> {
